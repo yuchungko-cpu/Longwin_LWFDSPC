@@ -1,0 +1,23 @@
+* text=auto
+
+# Source and project text files
+*.c text
+*.h text
+*.s text
+*.inc text
+*.mk text
+Makefile text
+*.xml text
+*.yml text
+*.yaml text
+*.html text
+*.txt text
+*.cfg text
+*.mc3 text
+
+# Binary assets / libraries
+*.pdf binary
+*.a binary
+*.lib binary
+*.hex binary
+*.elf binary

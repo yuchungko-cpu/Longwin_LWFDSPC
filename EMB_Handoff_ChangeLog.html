@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMB 交接 / UVWLock 修正 — 變更紀錄</title>
+<style>
+  :root { --bg:#f7f8fa; --card:#fff; --ink:#1f2933; --mut:#667085; --line:#e4e7ec;
+          --add:#e6ffed; --addln:#22863a; --del:#ffeef0; --delln:#b31d28; --code:#f3f4f6; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,"Segoe UI","Microsoft JhengHei",Roboto,Helvetica,Arial,sans-serif;
+         line-height:1.6; font-size:16px; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:22px; margin:36px 0 12px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  h3 { font-size:18px; margin:22px 0 8px; }
+  .sub { color:var(--mut); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:18px 22px; margin:16px 0; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:2px 9px; border-radius:999px;
+         color:#fff; margin-right:6px; vertical-align:middle; }
+  .t1 { background:#d92d20; } .t2 { background:#2563eb; } .tpa { background:#7c3aed; } .tpb { background:#0891b2; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; font-size:14.5px; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:#fafbfc; font-weight:600; }
+  code { background:var(--code); padding:1px 6px; border-radius:5px;
+         font-family:"Cascadia Code",Consolas,"Courier New",monospace; font-size:13.5px; }
+  pre.diff { background:#0d1117; border-radius:10px; padding:14px 16px; overflow-x:auto;
+             font-family:"Cascadia Code",Consolas,"Courier New",monospace; font-size:13px; line-height:1.5; }
+  pre.diff .h { color:#8b949e; }
+  pre.diff .a { color:#7ee787; background:rgba(46,160,67,.15); display:block; }
+  pre.diff .d { color:#ffa198; background:rgba(248,81,73,.15); display:block; }
+  pre.diff .c { color:#c9d1d9; display:block; }
+  .file { font-family:"Cascadia Code",Consolas,monospace; font-size:13.5px; color:#0b5cad; font-weight:600; }
+  ul.chk { list-style:none; padding-left:0; }
+  ul.chk li { padding:4px 0 4px 28px; position:relative; }
+  ul.chk li::before { content:"☐"; position:absolute; left:0; color:var(--mut); font-size:18px; }
+  .note { background:#fffbeb; border-left:4px solid #f59e0b; padding:10px 14px; border-radius:0 8px 8px 0; margin:12px 0; }
+  .foot { color:var(--mut); font-size:13px; margin-top:40px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>EMB 交接 / UVWLock 修正 — 變更紀錄</h1>
+  <p class="sub">Longwin HallFOC ReGen V2.4 CAN &middot; 馬達停車交接與低速再加速問題</p>
+
+  <div class="card">
+    <h3>摘要</h3>
+    <p>本次處理兩個客戶回報問題,皆與低速時的 <code>UVWLock</code>(UVW 三相短路平順停車)機制相關。</p>
+    <table>
+      <tr><th>#</th><th>症狀</th><th>路面</th><th>修正</th></tr>
+      <tr>
+        <td><span class="tag t1">問題 1</span></td>
+        <td>減速停車時馬達無法在電磁煞車(EMB)夾緊前鎖住車輪,車輛先倒溜再被 EMB 鎖住 → 抖動</td>
+        <td>斜坡</td>
+        <td>Modified Plan A + Plan B</td>
+      </tr>
+      <tr>
+        <td><span class="tag t2">問題 2</span></td>
+        <td>減速接近停止時再催油門,馬達要等停車程序跑完才有反應</td>
+        <td>平路</td>
+        <td>UVWLock 解除條件改用油門目標</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2><span class="tag t1">問題 1</span>斜坡倒溜 + 抖動</h2>
+
+  <div class="card">
+    <h3>根因</h3>
+    <p>停車交接存在「沒人管的空窗」:馬達卸力/UVW 短路在 <b>靜止時無靜態保持扭力</b>(短路煞車力 &prop; 反電動勢 &prop; 轉速,靜止時為 0),而 EMB 從下命令到 <b>機械夾緊有數十~上百 ms 延遲</b>。平路無重力故無感;斜坡上重力在此空窗把車往後拉 → 倒溜 → EMB 突然咬住 → 抖動。</p>
+
+    <h3>對策</h3>
+    <p><span class="tag tpa">Plan A</span><b>UVW 短路後延遲鎖定 EMB(延遲可調)</b>:UVW 短路維持平順停車,計時達 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 後鎖 EMB,讓機械夾緊時機對齊車速到 0。</p>
+    <p><span class="tag tpb">Plan B</span><b>反向霍爾邊緣即刻鎖定</b>:速度回授在低速不可靠,但<b>方向</b>(霍爾狀態序列)在第一個反向邊緣即可判定。一偵測到倒溜(輪端約 3mm)立即鎖 EMB,繞過延遲。減速比 5:1 放大了角度解析度。</p>
+  </div>
+
+  <h3 class="file">src/longwin/s_logic_embraker.h</h3>
+  <pre class="diff"><span class="c"> #define EMBRAKER_LOCK_SPEED_KMH_X10 5       // 低於此速度則鎖定煞車</span><span class="d">-#define EMBRAKER_LOCK_TIMEOUT_MS 1000         // 油門鬆開後，等待此時間後強制鎖定 (ms)</span><span class="a">+#define EMBRAKER_LOCK_TIMEOUT_MS 1000         // 油門鬆開後強制鎖定 (ms) (故障安全網)</span><span class="a">+// [Modified Plan A] UVW三相短路生效後，延遲此時間才鎖定EMB (ms)，可調以對齊機械夾緊時機</span><span class="a">+#define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 300</span></pre>
+
+  <pre class="diff"><span class="c"> E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,</span><span class="c">                                         uint16_t u16SpeedKmhx10,</span><span class="c">                                         int16_t i16MotorCommand,</span><span class="c">                                         int16_t i16ActualMotorCommand,</span><span class="a">+                                        bool bUVWLockActive,</span><span class="a">+                                        bool bReverseEdgeDetected,</span><span class="c">                                         uint32_t u32CurrentTimeMs);</span></pre>
+
+  <h3 class="file">src/longwin/s_logic_embraker.c</h3>
+  <pre class="diff"><span class="c"> static E_EMBRAKER_STATE s_eCurrentState = EMBRAKER_STATE_LOCKED;</span><span class="c"> static uint32_t s_u32LockTimerMs = 0;</span><span class="a">+</span><span class="a">+// [Modified Plan A] UVW 短路持續時間計時</span><span class="a">+static uint32_t s_u32UvwLockTimerMs = 0;</span><span class="a">+static bool s_bUvwLockTiming = false;</span></pre>
+
+  <pre class="diff"><span class="c">             case EMBRAKER_STATE_RELEASED:</span><span class="c">                 if (!bIsActive) {</span><span class="c">                     eNextState = EMBRAKER_STATE_WAITING_TO_LOCK;</span><span class="c">                     s_u32LockTimerMs = u32CurrentTimeMs;</span><span class="a">+                    s_bUvwLockTiming = false;             // 重置 Plan A 計時</span><span class="c">                 }</span><span class="c">                 break;</span><span class="c"></span><span class="c">             case EMBRAKER_STATE_WAITING_TO_LOCK:</span><span class="c">                 if (bIsActive) {</span><span class="c">                     eAction = EMBRAKER_ACTION_RELEASE;</span><span class="c">                     eNextState = EMBRAKER_STATE_RELEASED;</span><span class="a">+                    s_bUvwLockTiming = false;</span><span class="d">-                } else {</span><span class="d">-                    bool bShouldLockBySpeed = (u16SpeedKmhx10 < EMBRAKER_LOCK_SPEED_KMH_X10);</span><span class="d">-                    bool bShouldLockByTimeout = ((u32CurrentTimeMs - s_u32LockTimerMs) > EMBRAKER_LOCK_TIMEOUT_MS);</span><span class="d">-                    if (bIsActualMotorCommandZero && (bShouldLockBySpeed || bShouldLockByTimeout)) {</span><span class="d">-                        eAction = EMBRAKER_ACTION_LOCK;</span><span class="d">-                        eNextState = EMBRAKER_STATE_LOCKED;</span><span class="d">-                    }</span><span class="a">+                } else if (bReverseEdgeDetected) {        // [Plan B] 倒溜 → 立即鎖定</span><span class="a">+                    eAction = EMBRAKER_ACTION_LOCK;</span><span class="a">+                    eNextState = EMBRAKER_STATE_LOCKED;</span><span class="a">+                    s_bUvwLockTiming = false;</span><span class="a">+                } else if (bUVWLockActive) {             // [Plan A] 短路持續達延遲 → 鎖定</span><span class="a">+                    if (!s_bUvwLockTiming) {</span><span class="a">+                        s_bUvwLockTiming = true;</span><span class="a">+                        s_u32UvwLockTimerMs = u32CurrentTimeMs;</span><span class="a">+                    } else if ((u32CurrentTimeMs - s_u32UvwLockTimerMs) >= EMBRAKER_SHORT_TO_LOCK_DELAY_MS) {</span><span class="a">+                        eAction = EMBRAKER_ACTION_LOCK;</span><span class="a">+                        eNextState = EMBRAKER_STATE_LOCKED;</span><span class="a">+                        s_bUvwLockTiming = false;</span><span class="a">+                    }</span><span class="a">+                } else {                                 // 故障安全網: 原速度/逾時邏輯</span><span class="a">+                    s_bUvwLockTiming = false;</span><span class="a">+                    bool bShouldLockBySpeed = (u16SpeedKmhx10 < EMBRAKER_LOCK_SPEED_KMH_X10);</span><span class="a">+                    bool bShouldLockByTimeout = ((u32CurrentTimeMs - s_u32LockTimerMs) > EMBRAKER_LOCK_TIMEOUT_MS);</span><span class="a">+                    if (bIsActualMotorCommandZero && (bShouldLockBySpeed || bShouldLockByTimeout)) {</span><span class="a">+                        eAction = EMBRAKER_ACTION_LOCK;</span><span class="a">+                        eNextState = EMBRAKER_STATE_LOCKED;</span><span class="a">+                    }</span><span class="c">                 }</span><span class="c">                 break;</span></pre>
+  <p class="sub" style="font-size:13px">註:函式簽章亦同步加入 <code>bUVWLockActive</code> / <code>bReverseEdgeDetected</code> 兩個參數。</p>
+
+  <h3 class="file">main.c — 倒溜偵測訊號 (約 L1273)</h3>
+  <pre class="diff"><span class="c">                 }</span><span class="a">+</span><span class="a">+                // --- [Plan A/B] 準備 EMB 交接訊號 ---</span><span class="a">+                static unsigned char s_u8EmbTravelDir = 0;</span><span class="a">+                if (uGF.UVWLock == 0) {</span><span class="a">+                    s_u8EmbTravelDir = uGF.Direction;  // 驅動中持續鎖存行駛方向</span><span class="a">+                }</span><span class="a">+                bool bEmbUVWLockActive = (uGF.UVWLock != 0);</span><span class="a">+                bool bEmbReverseEdge = bEmbUVWLockActive && (uGF.Direction != s_u8EmbTravelDir);</span><span class="a">+</span><span class="c"> #if CODESW_SCOPE_ENABLE == 1</span><span class="c">                 E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(...</span></pre>
+
+  <h3 class="file">main.c — 兩處呼叫點 (SCOPE L1285 / MODBUS L1294)</h3>
+  <pre class="diff"><span class="c">                                                ReferenceRAW,                 // 馬達實際執行轉速</span><span class="a">+                                               bEmbUVWLockActive,            // [Plan A] UVW短路生效中</span><span class="a">+                                               bEmbReverseEdge,              // [Plan B] 偵測到倒溜</span><span class="c">                                                g_stSystemData.u32TimeMs);</span></pre>
+
+  <h2><span class="tag t2">問題 2</span>平路低速再加速沒反應</h2>
+
+  <div class="card">
+    <h3>根因</h3>
+    <p><code>UVWLock</code> 的解除判斷用的是<b>斜坡後的命令</b> <code>inReference = ActiveRpm</code>,而非油門目標。減速近停進入短路後再催油門,<code>TargetRpm</code> 雖立刻變大,但 <code>ActiveRpm</code> 只能沿斜坡慢慢爬,必須爬過 <code>UVWLockSpeed</code>(≈1966)短路才解除 → 表現為「油門沒反應,要等停完」。與坡度無關。</p>
+    <h3>對策</h3>
+    <p>在 UVWLock 維持條件加入<b>油門目標</b>判斷:只要 <code>TargetRpm</code> 超過門檻即立即解除短路,恢復即時加速。單純停車時 <code>TargetRpm</code>≈0,行為與原本相同。</p>
+  </div>
+
+  <h3 class="file">main.c — UVWLock 設定處</h3>
+  <pre class="diff"><span class="c">         // 當速度過低時鎖定UVW相位</span><span class="a">+        // [FIX] 解除條件加入油門目標(i16TargetRpm)判斷</span><span class="c">         if ((abs(piInputOmega.inReference) < UVWLockSpeed) &&</span><span class="d">-            (abs(piInputOmega.inMeasure) < UVWLockSpeed))</span><span class="a">+            (abs(piInputOmega.inMeasure) < UVWLockSpeed) &&</span><span class="a">+            (abs(g_stSystemData.i16TargetRpm) < UVWLockSpeed))</span><span class="c">             uGF.UVWLock = 1;</span><span class="c">         else</span><span class="c">             uGF.UVWLock = 0;</span></pre>
+
+  <h2>變更檔案總覽</h2>
+  <table>
+    <tr><th>檔案</th><th>改動</th><th>對應</th></tr>
+    <tr><td class="file">main.c</td><td>UVWLock 設定加 TargetRpm 條件</td><td><span class="tag t2">問題 2</span></td></tr>
+    <tr><td class="file">main.c</td><td>倒溜偵測訊號 + 兩呼叫點傳參</td><td><span class="tag tpa">A</span><span class="tag tpb">B</span></td></tr>
+    <tr><td class="file">src/longwin/s_logic_embraker.h</td><td>新增 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> + 原型加 2 參數</td><td><span class="tag tpa">A</span><span class="tag tpb">B</span></td></tr>
+    <tr><td class="file">src/longwin/s_logic_embraker.c</td><td>計時 statics + 簽章 + 鎖定狀態機重寫</td><td><span class="tag tpa">A</span><span class="tag tpb">B</span></td></tr>
+  </table>
+
+  <h2>上機驗證清單</h2>
+  <div class="card">
+    <ul class="chk">
+      <li>用 MPLAB X / XC16 編譯通過。</li>
+      <li>平路:正常滑行/短路停車仍平順、不抖,EMB 行為不變。</li>
+      <li>平路:減速近停立刻再催油門 → 馬達<b>立即</b>加速(問題 2)。</li>
+      <li>斜坡:鬆油門停車 → 倒溜量明顯縮小(目標約數 mm)、抖動消失(問題 1)。</li>
+      <li>調 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code>:量測煞車機械夾緊延遲,調到「夾緊 ≈ 車速到 0」。預設 300ms 為起點。</li>
+      <li>確認倒溜時 <code>uGF.Direction</code> 會在反向霍爾邊緣更新(UVW 短路下霍爾掃描仍運作)。</li>
+      <li>確認 <code>uGF.CtrlMode == 0</code>(速度模式)。</li>
+    </ul>
+    <div class="note"><b>備註:</b>EMB 更新跑在主迴圈、在 UVWLock 重算之前,故 <code>bEmbUVWLockActive</code> 用的是上一迴圈的值(一個週期延遲,對 ms 級延遲無影響)。若 <code>bUVWLockActive</code>/<code>bReverseEdgeDetected</code> 皆為 false,狀態機自動回退原速度/逾時邏輯(安全預設)。</div>
+  </div>
+
+  <p class="foot">合計 3 個檔案、9 處改動 &middot; 問題 1(Plan A+B)+ 問題 2(UVWLock 解除)</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# Local editor / assistant state
+.claude/
+.vscode/
+
+# MPLAB X generated build output
+LWFDSPC.X/build/
+LWFDSPC.X/dist/
+LWFDSPC.X/debug/
+LWFDSPC.X/production/
+LWFDSPC.X/.generated_files/
+
+# MPLAB X local/private state
+LWFDSPC.X/nbproject/private/
+LWFDSPC.X/defmplabxtrace.log
+LWFDSPC.X/defmplabxtrace.log.inx
+
+# Logs and diagnostics
+LWFDSPC.X/diagnostics/
+LWFDSPC.X/queuelogs/
+*.log
+*.log.inx
+
+# Compiler and linker intermediates
+*.o
+*.obj
+*.d
+*.elf
+*.hex
+*.map
+*.lst
+*.sdb
+*.sym
+*.cof
+
+# OS noise
+Thumbs.db
+Desktop.ini

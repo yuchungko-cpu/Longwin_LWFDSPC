@@ -1,0 +1,1407 @@
+/*******************************************************************************
+* Copyright (c) 2020 released Microchip Technology Inc.  All rights reserved.
+*
+* SOFTWARE LICENSE AGREEMENT:
+*
+* Microchip Technology Incorporated ("Microchip") retains all ownership and
+* intellectual property rights in the code accompanying this message and in all
+* derivatives hereto.  You may use this code, and any derivatives created by
+* any person or entity by or on your behalf, exclusively with Microchip's
+* proprietary products.  Your acceptance and/or use of this code constitutes
+* agreement to the terms and conditions of this notice.
+*
+* CODE ACCOMPANYING THIS MESSAGE IS SUPPLIED BY MICROCHIP "AS IS".  NO
+* WARRANTIES, WHETHER EXPRESS, IMPLIED OR STATUTORY, INCLUDING, BUT NOT LIMITED
+* TO, IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A
+* PARTICULAR PURPOSE APPLY TO THIS CODE, ITS INTERACTION WITH MICROCHIP'S
+* PRODUCTS, COMBINATION WITH ANY OTHER PRODUCTS, OR USE IN ANY APPLICATION.
+*
+* YOU ACKNOWLEDGE AND AGREE THAT, IN NO EVENT, SHALL MICROCHIP BE LIABLE,
+* WHETHER IN CONTRACT, WARRANTY, TORT (INCLUDING NEGLIGENCE OR BREACH OF
+* STATUTORY DUTY),STRICT LIABILITY, INDEMNITY, CONTRIBUTION, OR OTHERWISE,
+* FOR ANY INDIRECT, SPECIAL,PUNITIVE, EXEMPLARY, INCIDENTAL OR CONSEQUENTIAL
+* LOSS, DAMAGE, FOR COST OR EXPENSE OF ANY KIND WHATSOEVER RELATED TO THE CODE,
+* HOWSOEVER CAUSED, EVEN IF MICROCHIP HAS BEEN ADVISED OF THE POSSIBILITY OR
+* THE DAMAGES ARE FORESEEABLE.  TO THE FULLEST EXTENT ALLOWABLE BY LAW,
+* MICROCHIP'S TOTAL LIABILITY ON ALL CLAIMS IN ANY WAY RELATED TO THIS CODE,
+* SHALL NOT EXCEED THE PRICE YOU PAID DIRECTLY TO MICROCHIP SPECIFICALLY TO
+* HAVE THIS CODE DEVELOPED.
+*
+* You agree that you are solely responsible for testing the code and
+* determining its suitability.  Microchip has no obligation to modify, test,
+* certify, or support the code.
+*-------------------------------------------------------------------------------
+ * Hurst motor wiring -- e-scooter ref design
+ * -----------------------------------------------------------------------------
+ * Motor cable
+ * White - A
+ * Red - B
+ * Black - C
+ * -----------------------------------------------------------------------------
+ * Hall sensor
+ * White - HU
+ * Green - HV
+ * Brown - HC
+ * -----------------------------------------------------------------------------
+ *  V1.0 First released version 
+ *  V1.01 Add Run LED
+ *  V1.02 Add the 12 Hall table definition 
+ *  V2: Use Iq as the Braking 
+ *  V2.1: Fix torque mode switch, add motor lock detection. Fix MeasCurrOffset()
+ *  V2.2: add speed control, torque limit mode.
+ *  V2.31: add a delay counter for the acceleration 
+*******************************************************************************/
+#ifdef __XC16__  // See comments at the top of this header file
+#include <xc.h>
+#endif // __XC16__
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <libq.h>
+//#include <p33CK32MP105.h>  
+#include <p33CK256MP505.h> 
+
+#include "src/motor_control_noinline.h"
+
+#include "src/general.h"   
+#include "src/userparms.h"
+
+#include "src/control.h" 
+#include "src/control2.h"
+
+#include "src/readadc.h"   
+#include "src/meascurr.h" 
+#include "src/sccp3_tmr.h"
+
+#include "hal/board_service.h"
+
+#include "diagnostics/diagnostics.h"
+#include "src/HallScan_EE.h"
+
+#include "mcc_generated_files/system.h"
+//#include "mcc_generated_files/X2Cscope/X2Cscope.h"
+//#include "mcc_generated_files/sccp1_tmr.h"
+//#include "mcc_generated_files/pin_manager.h"
+#include "mcc_generated_files/can_types.h"
+#include "mcc_generated_files/can1.h"
+
+
+
+UGF_T uGF;
+
+volatile CTRL_PARM_T ctrlParm;
+MOTOR_STARTUP_DATA_T motorStartUpData;
+
+MCAPP_DATA_T mcappData;
+
+MEAS_CURR_PARM_T measCurrParm;   
+READ_ADC_PARM_T readADCParm;  
+
+volatile int16_t thetaElectrical = 0 ;
+uint16_t pwmPeriod;
+
+MC_ALPHABETA_T valphabeta;
+MC_ALPHABETA_T ialphabeta;
+MC_SINCOS_T sincosTheta;
+MC_DQ_T vdq,idq;
+MC_DUTYCYCLEOUT_T pwmDutycycle;
+MC_ABC_T   vabc,iabc;
+
+MC_PIPARMIN_T piInputIq;
+MC_PIPARMOUT_T piOutputIq;
+MC_PIPARMIN_T piInputId;
+MC_PIPARMOUT_T piOutputId;
+MC_PIPARMIN_T piInputOmega;
+MC_PIPARMOUT_T piOutputOmega;
+
+volatile FAULT_DATA_T faultUndervoltage;
+volatile FAULT_DATA_T faultOvervoltage;
+volatile FAULT_DATA_T faultOverTempMCU;
+volatile FAULT_DATA_T faultOverTempMOSFET;
+volatile FAULT_DATA_T faultOverCurrent;
+volatile FAULT_DATA_T faultMotorStall;
+volatile uint16_t adcDataBuffer;
+volatile uint16_t measCurrOffsetFlag = 0;
+
+volatile FaultFlags_T FaultFlags;
+
+volatile signed int HallAngle;
+
+bool FindHallStart;
+bool throttleDisengaged = 0;
+bool motorStarted = 0;
+bool fromRegenBrake = 0;
+bool throttleEnabled = 0;
+bool testBool = 0;
+uint32_t brakeCounter = 0;
+int16_t HallOffset = 0; 
+
+uint16_t regenCounter = 0;
+uint16_t openLoopCounter = 0;
+uint16_t HallState = 0;
+uint16_t OldHallState = 0;
+uint16_t TMRLatch = 30000;
+signed int HallPulses = 0;
+signed int HallPulsesLatch = 0;
+unsigned int HallPulsesCntr = 0;
+const int16_t PhaseValues[8] = {0, 0, -21844, -10922, 21844, 10922, 32767, 0}; 
+signed int TempVar;
+int32_t FilteredSpeed;      // Used for display
+int32_t FilteredHallPeriod;
+
+extern unsigned int CANCntr;
+unsigned int CANRXCntr = 0;
+CAN1_TX_FIFO_CHANNELS My_CAN_FIFO_CHANNELS;
+CAN_MSG_OBJ My_CAN_TXMSG;
+CAN_MSG_OBJ My_CAN_RXMSG;
+CAN_MSG_FIELD My_CAN_MSG_FIELD;
+uint8_t CANTXBuffer[5] = {0,0,0,0,0};
+extern uint8_t* CANRXPtr; 
+extern CAN_TX_MSG_REQUEST_STATUS CAN1_Transmit(const CAN1_TX_FIFO_CHANNELS fifoChannel, CAN_MSG_OBJ *txCanMsg);
+
+volatile uint16_t HallPeriod; 
+volatile uint16_t HallPeriodFiltered; 
+volatile uint32_t AvgPeriod;
+volatile uint16_t hallValue;
+volatile int16_t Speed = 0;
+volatile uint16_t startUpCounter = 0;
+
+extern unsigned int CCP3TMR_INTCntr;
+unsigned int DeltaT_Index = 0;
+unsigned long DeltaT_Array[] = {32767,32767,32767,32767,32767,32767,32767,32767};
+unsigned long PeriodAverage = 0;
+unsigned long DeltaT_Sum = 0;
+unsigned int HallMinPeriod;
+extern tFindHallAngle FindHallAngle;
+unsigned int T1INTCnt = 0;
+unsigned char DirSWCntr = 0;
+unsigned char RunSWCntr = 0;
+unsigned int PollingCntr = 0;
+signed int ReferenceRAW = 0;
+unsigned char SpeedLoopCntr = 0;
+unsigned char SpeedSlopCntr = 0;
+signed int ReGenTorq = Q15(0.1);     // Initial ReGen brake duty cycle
+signed int ReGenSpeed = Q15(0.00);   // Low limit of speed for braking   
+unsigned int X2CPG1Duty = 0;
+unsigned int X2CPG2Duty = 0;
+unsigned int X2CPG3Duty = 0;
+signed int UVWLockSpeed = Q15(0.03);
+signed int SpeedRefHighLimit;
+unsigned int AccSet = 1;
+signed int TorqMode_IqMax = Q15(0.58);
+signed int BrakeStopSpeed = 600;    // 600 = Q15(0.0183)  No braking below the speed
+signed int BrakeStartSpeed = 1000;  // 1000 = Q15(0.0305) ;   // No braking below the speed
+signed int MotorStartSpeed = Q15(0.01);
+signed int BrakeStartSpeedPulses = 15;      // use pulses instead of speed
+signed int BrakeStopSpeedPulses = 7;
+signed int MotorStartSpeedPulses = 7;
+unsigned int MOSFET_OverTemp = OVERTEMP_MOSFET_80;
+unsigned long ThrottleHighCntr = 0;       // used to start/stop
+unsigned int LEDFlashCntr = 0;
+unsigned int FaultLEDFLashCntr = 0;
+volatile register int a_Reg asm("A");
+uint16_t TorqAccCntr = 0; 
+
+void InitControlParameters(void);
+void DoControl(void);
+void ResetParmeters(void);
+void MeasCurrOffset(int16_t *pOffseta,int16_t *pOffsetb);
+extern inline void CalculateParkAngleHall(void);
+void InitMovingAvgPeriod(void);
+void CalcMovingAvgPeriod(uint16_t instPeriod);
+void CalcMovingAvgSpeed(int32_t instSpeed);
+void UndervoltageDetect(void);
+void OvertemperatureDetectMCU(void);
+void Braking(void);
+void OvertemperatureDetectMOSFET(void);
+extern void SpeedCalculation(void);
+void CNRead_Inline(void);
+extern void GetInitHallAngle(void);
+void SetupTimer1(void);
+extern inline void GetHallAngleAuto_Inline (void);
+void VoltageDetect(void);
+void MotorStallDetect(void);
+void ClearAllFault(void);
+void OvervoltageDetect(void);
+extern signed int FracMpy(signed int mul_1, signed int mul_2);
+// *****************************************************************************
+/* Function:
+   main()
+
+  Summary:
+    main() function
+
+  Description:
+    program entry point, calls the system initialization function group 
+
+  Precondition:
+    None.
+
+  Parameters:
+    None
+
+  Returns:
+    None.
+
+  Remarks:
+    None.
+ */
+
+int main ( void )
+{
+
+    HallMinPeriod = MINPERIOD;
+    //HallMinPeriod = 70;
+    HallPeriod= 30000;
+    AccSet = ACCSET;
+    SpeedRefHighLimit = Q15_MAXSPEED_REF_LIMIT;
+    /* Initialize Peripherals */
+    Init_Peripherals();
+    SW_12V = TURN_ON;       // must before CAN_Initialize();
+    CAN1_Initialize();
+    //SCCP3_TMR_Initialize();
+    //CN_Configure();   
+    OverCurrentEnable();
+    /* Initializing Current offsets in structure variable */
+    measCurrOffsetFlag = 1;
+    MeasCurrOffset(&measCurrParm.Offseta, &measCurrParm.Offsetb);
+    //measCurrParm.Offseta = 384;
+    //measCurrParm.Offsetb = 192;
+    //HAL_MC1PhaseStateChangeMaxPeriodSet(PERIOD_CONSTANT);
+    
+    CORCONbits.SATA = 1;
+    CORCONbits.SATB = 1;
+    CORCONbits.ACCSAT = 1;
+
+    CORCONbits.SATA = 0;
+
+
+    /* Initialize PI control parameters */
+    InitControlParameters();
+
+    /* Reset parameters used for running motor through Inverter */
+    ResetParmeters();
+
+    /* Uncomment to enable throttle control*/
+    //CN_PortCEnable();
+    //CN_PortCDisable();
+    SetupTimer1();
+    DiagnosticsInit();
+    
+    OldHallState = HALL_A + ((unsigned int)HALL_B * 2) + ((unsigned int)HALL_C * 4);  // initial Hall value    
+    HallState = OldHallState;
+    GetInitHallAngle();
+
+
+#define MotorAngle_3           
+//=============================================================================    
+// MotorAngle_1~6, 546231 with "increasing" angles    
+//=============================================================================    
+#ifdef MotorAngle_1             // works for Hust BLDC Motor, increasing angle
+    FindHallAngle.Pos[5] = 10922+ HallOffset;
+    FindHallAngle.Pos[4] = 21844+ HallOffset;    
+    FindHallAngle.Pos[6] = 32767+ HallOffset;   
+    FindHallAngle.Pos[2] = -21844+ HallOffset;
+    FindHallAngle.Pos[3] = -10922+ HallOffset;
+    FindHallAngle.Pos[1] = 0 + HallOffset;  
+    uGF.DirectionDefault = 1;    // 1: For Hurst motor Hall signal sequence
+#endif
+#ifdef MotorAngle_2
+    FindHallAngle.Pos[1] = 10922+ HallOffset;
+    FindHallAngle.Pos[5] = 21844+ HallOffset;    
+    FindHallAngle.Pos[4] = 32767+ HallOffset;   
+    FindHallAngle.Pos[6] = -21844+ HallOffset;
+    FindHallAngle.Pos[2] = -10922+ HallOffset;
+    FindHallAngle.Pos[3] = 0 + HallOffset;   
+    uGF.DirectionDefault = 1;    // 1: For Hurst motor Hall signal sequence
+#endif   
+#ifdef MotorAngle_3							// Xiaomi e-kick scooter
+    FindHallAngle.Pos[3] = 10922+ HallOffset;
+    FindHallAngle.Pos[1] = 21844+ HallOffset;    
+    FindHallAngle.Pos[5] = 32767+ HallOffset;   
+    FindHallAngle.Pos[4] = -21844+ HallOffset;
+    FindHallAngle.Pos[6] = -10922+ HallOffset;
+    FindHallAngle.Pos[2] = 0 + HallOffset;   
+    uGF.DirectionDefault = 1;    // 1: For Hurst motor Hall signal sequence
+#endif     
+#ifdef MotorAngle_4
+    FindHallAngle.Pos[2] = 10922+ HallOffset;
+    FindHallAngle.Pos[3] = 21844+ HallOffset;    
+    FindHallAngle.Pos[1] = 32767+ HallOffset;   
+    FindHallAngle.Pos[5] = -21844+ HallOffset;
+    FindHallAngle.Pos[4] = -10922+ HallOffset;
+    FindHallAngle.Pos[6] = 0 + HallOffset;   
+    uGF.DirectionDefault = 1;    // 1: For Hurst motor Hall signal sequence
+#endif    
+#ifdef MotorAngle_5
+    FindHallAngle.Pos[6] = 10922+ HallOffset;
+    FindHallAngle.Pos[2] = 21844+ HallOffset;    
+    FindHallAngle.Pos[3] = 32767+ HallOffset;   
+    FindHallAngle.Pos[1] = -21844+ HallOffset;
+    FindHallAngle.Pos[5] = -10922+ HallOffset;
+    FindHallAngle.Pos[4] = 0 + HallOffset;  
+    uGF.DirectionDefault = 1;    // 1: For Hurst motor Hall signal sequence
+#endif     
+#ifdef MotorAngle_6
+    FindHallAngle.Pos[4] = 10922+ HallOffset;
+    FindHallAngle.Pos[6] = 21844+ HallOffset;    
+    FindHallAngle.Pos[2] = 32767+ HallOffset;   
+    FindHallAngle.Pos[3] = -21844+ HallOffset;
+    FindHallAngle.Pos[1] = -10922+ HallOffset;
+    FindHallAngle.Pos[5] = 0 + HallOffset;  
+    uGF.DirectionDefault = 1;    // 1: For Hurst motor Hall signal sequence
+#endif     
+//=============================================================================    
+// MotorAngle_1~6, 546231 with decreasing angles     
+//=============================================================================
+#ifdef MotorAngle_7             // works for NIDEC R35 90W BLDC Motor
+    FindHallAngle.Pos[5] = 10922+ HallOffset;
+    FindHallAngle.Pos[1] = 21844+ HallOffset;    
+    FindHallAngle.Pos[3] = 32767+ HallOffset;   
+    FindHallAngle.Pos[2] = -21844+ HallOffset;
+    FindHallAngle.Pos[6] = -10922+ HallOffset;
+    FindHallAngle.Pos[4] = 0 + HallOffset;  
+    uGF.DirectionDefault = 0;    // 0: For some hub motors
+#endif      
+#ifdef MotorAngle_8
+    FindHallAngle.Pos[4] = 10922+ HallOffset;
+    FindHallAngle.Pos[5] = 21844+ HallOffset;    
+    FindHallAngle.Pos[1] = 32767+ HallOffset;   
+    FindHallAngle.Pos[3] = -21844+ HallOffset;
+    FindHallAngle.Pos[2] = -10922+ HallOffset;
+    FindHallAngle.Pos[6] = 0 + HallOffset;  
+    uGF.DirectionDefault = 0;    // 0: For some hub motors
+#endif     
+#ifdef MotorAngle_9
+    FindHallAngle.Pos[6] = 10922+ HallOffset;
+    FindHallAngle.Pos[4] = 21844+ HallOffset;    
+    FindHallAngle.Pos[5] = 32767+ HallOffset;   
+    FindHallAngle.Pos[1] = -21844+ HallOffset;
+    FindHallAngle.Pos[3] = -10922+ HallOffset;
+    FindHallAngle.Pos[2] = 0 + HallOffset;   
+    uGF.DirectionDefault = 0;    // 0: For some hub motors
+#endif     
+#ifdef MotorAngle_10
+    FindHallAngle.Pos[2] = 10922+ HallOffset;
+    FindHallAngle.Pos[6] = 21844+ HallOffset;    
+    FindHallAngle.Pos[4] = 32767+ HallOffset;   
+    FindHallAngle.Pos[5] = -21844+ HallOffset;
+    FindHallAngle.Pos[1] = -10922+ HallOffset;
+    FindHallAngle.Pos[3] = 0 + HallOffset;   
+    uGF.DirectionDefault = 0;    // 0: For some hub motors
+#endif     
+#ifdef MotorAngle_11
+    FindHallAngle.Pos[3] = 10922+ HallOffset;
+    FindHallAngle.Pos[2] = 21844+ HallOffset;    
+    FindHallAngle.Pos[6] = 32767+ HallOffset;   
+    FindHallAngle.Pos[4] = -21844+ HallOffset;
+    FindHallAngle.Pos[5] = -10922+ HallOffset;
+    FindHallAngle.Pos[1] = 0 + HallOffset; 
+    uGF.DirectionDefault = 0;    // 0: For some hub motors
+#endif     
+#ifdef MotorAngle_12
+    FindHallAngle.Pos[1] = 10922+ HallOffset;
+    FindHallAngle.Pos[3] = 21844+ HallOffset;    
+    FindHallAngle.Pos[2] = 32767+ HallOffset;   
+    FindHallAngle.Pos[6] = -21844+ HallOffset;
+    FindHallAngle.Pos[4] = -10922+ HallOffset;
+    FindHallAngle.Pos[5] = 0 + HallOffset;   
+    uGF.DirectionDefault = 0;    // 0: For some hub motors
+#endif     
+    HAL_MC1PWMEnableOutputs();
+    IOTestOutput = 0;
+//  Initialize control mode  
+    uGF.CtrlMode = CTRLMODE;
+    while(1)
+    {
+        if(uGF.CtrlMode == 0)
+            SpeedRefHighLimit = Q15_MAXSPEED_REF_LIMIT;
+        else if(uGF.CtrlMode == 2)
+            SpeedRefHighLimit = Q15_MAXSPEED_CtrlMode_2;     
+        
+        DiagnosticsStepMain();
+        if(PollingCntr >= 400)          // 20ms
+        {
+            PollingCntr = 0;
+            if(!IODirSW)
+            {
+                if((DirSWCntr++ >= 1)&&(uGF.DirSWOld == 1))
+                {
+                    DirSWCntr = 0;
+                    if(uGF.DirSW == 1)
+                    {
+                        uGF.DirSW = 0;
+                        uGF.DirSWOld = 0;
+                    }
+                    else
+                    {
+                        uGF.DirSW = 1;
+                        uGF.DirSWOld = 0;
+                    }                                    
+                }
+            }
+            else
+                uGF.DirSWOld = 1;
+            
+            if(!IORunSW)
+            {
+                if((RunSWCntr++ >= 1)&&(uGF.RunSWOld == 1))
+                {
+                    RunSWCntr = 0;
+                    if(uGF.RunSW == 1)
+                    {
+                        uGF.RunSW = 0;
+                        uGF.RunSWOld = 0;
+                    }
+                    else
+                    {
+                        uGF.RunSW = 1;
+                        uGF.RunSWOld = 0;
+                    }                                    
+                }
+            }
+            else
+                uGF.RunSWOld = 1;            
+        
+            
+            
+            MotorStallDetect();
+            
+        }
+        if(uGF.DirSW == 1)
+            IODirSWLED = 1;
+        else
+            IODirSWLED = 0;
+        if(FaultLEDFLashCntr > 5000)
+        {
+            FaultLEDFLashCntr = 0;
+            IOFaultLED = !IOFaultLED;       // used for running indication
+        }
+        if(uGF.Fault == 1)
+        {
+            if(LEDFlashCntr > 2500)
+            {
+                LEDFlashCntr = 0;
+                IORunLED = !IORunLED;
+            }
+            uGF.RunMotor = 0; 
+        }
+            
+        if((uGF.RunSW == 1)||(uGF.RunSWOld_Throttle == 1))
+        {
+            uGF.RunMotor = 1;
+            if(uGF.Fault == 0)
+                IORunLED = 1;
+         //   HAL_MC1PWMEnableOutputs();
+        }
+        else if((uGF.RunSW == 0)&&(uGF.RunSWOld_Throttle == 0))
+        {
+            uGF.RunMotor = 0; 
+            IORunLED = 0;
+            ClearAllFault();
+        }
+           
+        uGF.BrakeSWOn = _RC12;
+        if(Speed == 0)
+            HallPeriod = 30000;     // Reset bugs workaround
+        
+        
+        if(CAN1_Receive(&My_CAN_RXMSG) == true)
+        {
+            CANRXCntr++;
+            My_CAN_TXMSG.data = CANTXBuffer;
+            My_CAN_TXMSG.msgId = 0x200;
+            My_CAN_TXMSG.field.dlc = 5;     
+            if(*CANRXPtr == 0x10)       // Battery voltage
+            {
+                CANTXBuffer[0] = 0x10;
+               // TempVar = FracMpy (faultOvervoltage.monitor+1, Q15(0.051625));
+                TempVar = faultOvervoltage.monitor+1;
+                CANTXBuffer[4] = TempVar;
+                CANTXBuffer[3] = TempVar >> 8;
+                CANTXBuffer[2] = 0;
+                CANTXBuffer[1] = 0;
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }
+//            else if(*CANRXPtr == 0x15)  // motor RPM
+//            {
+//                CANTXBuffer[0] = 0x15;
+//                TempVar = HallPulsesLatch << 2; // x4: 10 poles motor;
+//                CANTXBuffer[4] = TempVar;
+//                CANTXBuffer[3] = TempVar >> 8;
+//                CANTXBuffer[2] = 0;
+//                CANTXBuffer[1] = 0;                
+//                CAN1_Transmit(1, &My_CAN_TXMSG);                
+//            }
+            else if(*CANRXPtr == 0x15)  // motor RPM
+            {
+                CANTXBuffer[0] = 0x15;
+                //TempVar = FracMpy (FilteredSpeed, Q15(0.30517));
+                TempVar = FracMpy(HallPulsesLatch, Q15(0.83333));
+                CANTXBuffer[4] = TempVar << 3;
+                CANTXBuffer[3] = (TempVar <<3)>> 8;
+                CANTXBuffer[2] = 0;
+                CANTXBuffer[1] = 0;                
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }            
+            else if(*CANRXPtr == 0x12)  // REGEN Mode
+            {
+                CANTXBuffer[0] = 0x12;
+                CANTXBuffer[4] = 1;
+                CANTXBuffer[3] = 0;
+                CANTXBuffer[2] = 0;
+                CANTXBuffer[1] = 0;                
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }           
+            else if(*CANRXPtr == 0x13)  // Assistance mode
+            {
+                CANTXBuffer[0] = 0x13;
+                CANTXBuffer[4] = 1;
+                CANTXBuffer[3] = 0;
+                CANTXBuffer[2] = 0;
+                CANTXBuffer[1] = 0;                
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }            
+            else if(*CANRXPtr == 0x14)  // Drive Temp
+            {
+                CANTXBuffer[0] = 0x14;
+                CANTXBuffer[4] = faultOverTempMOSFET.monitor;
+                CANTXBuffer[3] = faultOverTempMOSFET.monitor >> 8;
+                CANTXBuffer[2] = 0;
+                CANTXBuffer[1] = 0;                
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }            
+            else if(*CANRXPtr == 0x30)  // None or Error
+            {
+                CANTXBuffer[0] = 0x30;
+                CANTXBuffer[4] = 1;
+                CANTXBuffer[3] = 0;
+                CANTXBuffer[2] = 0;
+                CANTXBuffer[1] = 0;                
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }              
+            else
+            {
+                CANTXBuffer[0] = 0x55;
+                CAN1_Transmit(1, &My_CAN_TXMSG);                
+            }
+        }
+        
+        
+    }//inner while loop
+
+    // should never get here
+    while(1){}
+}// End of Main loop
+
+// *****************************************************************************
+/* Function:
+    ResetParmeters()
+
+  Summary:
+    This routine resets all the parameters required for Motor 
+
+  Description:
+    Reinitializes the duty cycle,resets all the counters when restarting motor
+
+  Precondition:
+    None.
+
+  Parameters:
+    None
+
+  Returns:
+    None.
+
+  Remarks:
+    None.
+ */
+void ResetParmeters(void)
+{
+    /* Make sure ADC does not generate interrupt while initializing parameters*/
+	DisableADCInterrupt();
+    
+    /* Re initialize the duty cycle to minimum value */
+    INVERTERA_PWM_PDC3 = MIN_DUTY;
+    INVERTERA_PWM_PDC2 = MIN_DUTY;
+    INVERTERA_PWM_PDC1 = MIN_DUTY;
+	HAL_MC1PWMDisableOutputs();
+    
+    /* enable FOC control loop   */
+    uGF.RunMotor = 0;
+    /* Set the reference speed value to 0 */
+    ctrlParm.qVelRef = 0;
+
+   /* Initialize PI control parameters */
+    InitControlParameters();        
+    
+    faultUndervoltage.counter = 0;
+    faultOverCurrent.counter = 0;
+    faultOverTempMCU.counter = 0;
+    faultOverTempMOSFET.counter = 0;
+    faultOverTempMCU.indicator = 0;
+
+    piInputOmega.inReference = 0;
+    piInputOmega.inMeasure = 0;
+    mcappData.movingAvgFilterSpeed.avg = 0;
+    readADCParm.qPrevAnRef = 0;
+    pwmDutycycle.dutycycle = 0;
+    LATDbits.LATD8 = 0;
+    
+    motorStarted = 0;
+    throttleEnabled = 0;
+    fromRegenBrake = 0;
+    testBool = 1;
+    
+    startUpCounter = 0;
+    openLoopCounter = 0;
+    
+    /* Enable ADC interrupt and begin main loop timing */
+    ClearADCIF();
+	adcDataBuffer = ClearADCIF_ReadADCBUF();
+    EnableADCInterrupt();
+}
+
+// *****************************************************************************
+/* Function:
+    DoControl()
+
+  Summary:
+    Executes one PI iteration for each of the three loops Id,Iq,Speed
+
+  Description:
+    This routine executes one PI iteration for each of the three loops
+    Id,Iq,Speed
+
+  Precondition:
+    None.
+
+  Parameters:
+    None
+
+  Returns:
+    None.
+
+  Remarks:
+    None.
+ */
+void DoControl( void )
+{
+    /* Temporary variables for sqrt calculation of q reference */
+    volatile int16_t temp_qref_pow_q15;
+    if(++HallPulsesCntr >= 2000)       // 100ms update
+    {
+        HallPulsesCntr = 0;
+        HallPulsesLatch = HallPulses;   // For speed pulses output
+        HallPulses = 0;
+    }
+    FilteredSpeed = FracMpy(Q15(0.01),Speed) + FracMpy(Q15(1-0.01),FilteredSpeed);
+    if(FilteredSpeed < 0)
+        FilteredSpeed = 0;
+    ReadADC0(ADCBUF_SPEED_REF_A, &readADCParm);
+    ReferenceRAW = readADCParm.qADValue;
+    // XIAOMI throttle: 8712~25584
+   
+    
+   // if(Speed < MotorStartSpeed)
+    if(HallPulsesLatch < MotorStartSpeedPulses)    
+    {
+        if(ReferenceRAW < 9100)
+        {
+            ThrottleHighCntr = 0;
+            uGF.RunSWOld_Throttle = uGF.RunSW_Throttle;            
+        }    
+        else if(ReferenceRAW >= 25000)
+        {
+            if(++ThrottleHighCntr > 60000) // hold 3 seconds to enable 
+            {
+                 if(uGF.RunSWOld_Throttle == 0)
+                 {
+                      uGF.RunSW_Throttle = 1;
+                 }
+                 else
+                 {
+                     uGF.RunSW_Throttle = 0; 
+                 }                  
+            }
+        }
+
+        ReferenceRAW = 0;
+        ctrlParm.qVqRef = 0;   
+
+    }
+ 
+    if(ReferenceRAW < 9100)  
+    {
+        ReferenceRAW = 0;
+        ctrlParm.qVqRef = 0;
+    }
+    else if (ReferenceRAW > 25000)  // Input is dis-connected
+    {
+        ReferenceRAW = 25000;
+    } 
+    //ReferenceRAW= FracMpy(ReferenceRAW, Q15(0.05));  
+    a_Reg = __builtin_mpy(ReferenceRAW, Q15(0.5),0,0,0,0,0,0);
+    ReferenceRAW = __builtin_sacr(a_Reg,0);
+    
+    //if(Speed < BrakeStopSpeed)
+    if(HallPulsesLatch < BrakeStopSpeedPulses)
+        uGF.ReGenEnable = 0;
+    //else if(Speed > BrakeStartSpeed)
+    else if(HallPulsesLatch > BrakeStartSpeedPulses)
+        uGF.ReGenEnable = 1;
+    if(uGF.DirSW == 1)
+        ReferenceRAW = -abs(ReferenceRAW);
+    
+ // 0:Speed Mode 1: Torque mode 2: Speed control, torque limit
+    if(uGF.CtrlMode == 0)      
+    {
+        uGF.ReGenFlag = 0;      // used in torque mode
+        if(++SpeedLoopCntr >= 10)
+        {
+            SpeedLoopCntr = 0;
+            if(++SpeedSlopCntr >= 10)
+            {   
+                SpeedSlopCntr = 0;
+                if(ctrlParm.qVelRef < ReferenceRAW)              
+                    ctrlParm.qVelRef += AccSet;
+                else
+                    ctrlParm.qVelRef -= AccSet;  
+            }
+            piInputOmega.inMeasure = Speed;
+            piInputOmega.inReference = ReferenceRAW;
+            if(piInputOmega.inReference > SpeedRefHighLimit)
+                piInputOmega.inReference = SpeedRefHighLimit;
+            else if(piInputOmega.inReference < -SpeedRefHighLimit)
+                piInputOmega.inReference = -SpeedRefHighLimit;
+            MC_ControllerPIUpdate_Assembly(piInputOmega.inReference,
+                                           piInputOmega.inMeasure,
+                                           &piInputOmega.piState,
+                                           &piOutputOmega.out);
+
+            ctrlParm.qVqRef = piOutputOmega.out;
+            if((abs(piInputOmega.inReference) < UVWLockSpeed)&&(abs(piInputOmega.inMeasure)<UVWLockSpeed))
+                uGF.UVWLock = 1;
+            else
+                uGF.UVWLock = 0;
+        }        
+    }
+    else if((uGF.ReGenEnable == 1) && (ReferenceRAW == 0))  // ReGen braking
+    {
+        // Enabled when speed is positive
+        if(Speed >= BrakeStartSpeed)    // Faster response
+        //if(HallPulsesLatch >= BrakeStartSpeedPulses)  // slow response !!
+        {
+            ctrlParm.qVqRef = -ReGenTorq;
+//            if(ctrlParm.qVqRef > -ReGenTorq)
+//                ctrlParm.qVqRef -= 1;
+//            else
+//                ctrlParm.qVqRef += 1;
+            uGF.ReGenFlag = 0; 
+        }        
+        //else if (HallPulsesLatch < BrakeStopSpeedPulses)
+        else if(Speed < BrakeStopSpeed)   
+        {
+            ctrlParm.qVqRef = 0;
+        }
+#ifdef MotorReGenLock              
+        if(abs(Speed) < ReGenSpeed )
+        {
+            ctrlParm.qVqRef = 0; 
+            ReferenceRAW = 0;
+            uGF.ReGenFlag = 1;        // Short U V W for braking    
+            
+        }
+#endif
+    }
+    else if(uGF.CtrlMode == 2)  // Speed control, torque limit
+    {
+        uGF.ReGenFlag = 0;      // used in torque mode
+        if(++SpeedLoopCntr >= 10)
+        {
+            SpeedLoopCntr = 0;
+
+            piInputOmega.inMeasure = Speed;
+            if(uGF.DirSW == 0)
+            {
+                piInputOmega.inReference = SpeedRefHighLimit;    
+                MC_ControllerPIUpdate_Assembly(piInputOmega.inReference,
+                                               piInputOmega.inMeasure,
+                                               &piInputOmega.piState,
+                                               &piOutputOmega.out);  
+                if(piOutputOmega.out > ReferenceRAW)
+                    piOutputOmega.out = ReferenceRAW;
+                
+                ctrlParm.qVqRef = piOutputOmega.out;
+            }
+            else
+            {
+                piInputOmega.inReference = -SpeedRefHighLimit;  
+                MC_ControllerPIUpdate_Assembly(piInputOmega.inReference,
+                                               piInputOmega.inMeasure,
+                                               &piInputOmega.piState,
+                                               &piOutputOmega.out);  
+                if(piOutputOmega.out < ReferenceRAW)
+                    piOutputOmega.out = ReferenceRAW;
+                
+                ctrlParm.qVqRef = piOutputOmega.out;
+            }
+
+            if((abs(piInputOmega.inReference) < UVWLockSpeed)&&(abs(piInputOmega.inMeasure)<UVWLockSpeed))
+                uGF.UVWLock = 1;
+            else
+                uGF.UVWLock = 0;
+        }                
+    }    
+    else{                                          // Normal torque control loop
+        if(ctrlParm.qVqRef < ReferenceRAW)
+        {
+            if(TorqAccCntr++ >= TORQ_ACCDELAY)
+            {
+                ctrlParm.qVqRef += 2;    
+                TorqAccCntr = 0;
+            }            
+        }
+        else
+            ctrlParm.qVqRef -= 1;
+    
+        if(ctrlParm.qVqRef > TorqMode_IqMax)
+            ctrlParm.qVqRef = TorqMode_IqMax;
+        else if(ctrlParm.qVqRef < -TorqMode_IqMax)
+            ctrlParm.qVqRef = -TorqMode_IqMax; 
+    }
+            
+    ctrlParm.qVdRef = 0; 
+
+    /* PI control for D */
+    piInputId.inMeasure = idq.d;
+    piInputId.inReference  = ctrlParm.qVdRef;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+    MC_ControllerPIUpdate_Assembly(piInputId.inReference,
+                                   piInputId.inMeasure,
+                                   &piInputId.piState,
+                                   &piOutputId.out);
+    vdq.d = piOutputId.out;
+
+     /* Dynamic d-q adjustment with d component priority*/
+    // Vector limitation
+    // Vd is not limited
+    // Vq is limited so the vector Vs is less than a maximum of 95%.
+    // Vs = SQRT(Vd^2 + Vq^2) < 0.98
+    // Vq = SQRT(0.98^2 - Vd^2)
+    temp_qref_pow_q15 = (int16_t)(__builtin_mulss(piOutputId.out ,
+                                                  piOutputId.out) >> 15);
+    temp_qref_pow_q15 = Q15(MAX_VOLTAGE_VECTOR) - temp_qref_pow_q15;
+    piInputIq.piState.outMax = Q15SQRT(temp_qref_pow_q15);
+    piInputIq.piState.outMin = -piInputIq.piState.outMax;
+
+    /* PI control for Q */
+    piInputIq.inMeasure  = idq.q;
+    piInputIq.inReference  = ctrlParm.qVqRef;
+    MC_ControllerPIUpdate_Assembly(piInputIq.inReference,
+                                   piInputIq.inMeasure,
+                                   &piInputIq.piState,
+                                   &piOutputIq.out);
+    vdq.q = piOutputIq.out;
+
+}
+
+// *****************************************************************************
+/* Function:
+    _ADCAN17Interrupt()
+  Summary:
+    _ADCAN17Interrupt() ISR routine
+
+  Description:
+    Does speed calculation and executes the vector update loop
+    The ADC sample and conversion is triggered by the PWM period.
+
+  Precondition:
+    None.
+
+  Parameters:
+    None
+
+  Returns:
+    None.
+
+  Remarks:
+    None.
+ */
+
+
+void __attribute__((__interrupt__,no_auto_psv)) _ADCAN17Interrupt()
+{
+
+    PollingCntr++;
+    LEDFlashCntr++;
+    FaultLEDFLashCntr++;
+	// Read ADC Buffer to Clear Flag 
+	adcDataBuffer = ClearADCIF_ReadADCBUF();
+    
+    // Read unsigned values 
+    ReadADC0(ADCBUF_SPEED_REF_A, &readADCParm);
+
+    CNRead_Inline();
+
+    // Calculate qIa,qIb 
+    MeasCompCurr(ADCBUF_INV_A_IPHASE1, ADCBUF_INV_A_IPHASE2, &measCurrParm);
+
+    iabc.a = measCurrParm.qIa;
+    iabc.b = measCurrParm.qIb;
+
+    // Calculate qIalpha,qIbeta from qIa,qIb 
+    MC_TransformClarke_Assembly(&iabc, &ialphabeta);
+
+    // Calculate qId,qIq from qSin,qCos,qIalpha,qIbeta 
+    MC_TransformPark_Assembly(&ialphabeta, &sincosTheta, &idq);
+
+    // Calculate control values 
+    DoControl();
+
+    CalculateParkAngleHall();
+
+    // Calculate qSin,qCos from the thetaElectrical
+    MC_CalculateSineCosine_Assembly_Ram(thetaElectrical, &sincosTheta);
+
+    // Calculate qValpha,qVbeta from qSin,qCos,qVd,qVq 
+    MC_TransformParkInverse_Assembly(&vdq, &sincosTheta, &valphabeta);
+
+    // Calculate qVa,qVb,qVc vectors from qValpha,qVbeta 
+    MC_TransformClarkeInverseSwappedInput_Assembly(&valphabeta, &vabc);
+
+    // Generate SV-PWM from the voltage vectors and PWM frequency 
+    MC_CalculateSpaceVectorPhaseShifted_Assembly(&vabc, pwmPeriod,&pwmDutycycle);
+
+//    if (pwmDutycycle.dutycycle1 < MIN_DUTY)
+//    {
+//        pwmDutycycle.dutycycle1 = MIN_DUTY;
+//    }
+//    if (pwmDutycycle.dutycycle2 < MIN_DUTY)
+//    {
+//        pwmDutycycle.dutycycle2 = MIN_DUTY;
+//    }
+//    if (pwmDutycycle.dutycycle3 < MIN_DUTY)
+//    {
+//        pwmDutycycle.dutycycle3 = MIN_DUTY;
+//    }
+    
+
+        
+    if((uGF.RunMotor == 0) ||(uGF.Fault == 1))
+    {
+    
+        HAL_MC1PWMDisableOutputs();
+        piInputOmega.piState.integrator = 0;
+        piInputIq.piState.integrator = 0;
+        piInputId.piState.integrator = 0;
+    }
+    else if ((uGF.UVWLock == 1)&&(uGF.CtrlMode == 0))       // Works only in speed mode
+    {
+        // low side turns on, high side off
+        PG3IOCONLbits.OVRDAT = 1;  // 0b00 = State for PWM3H,L, if Override is Enabled
+        PG2IOCONLbits.OVRDAT = 1;  // 0b00 = State for PWM2H,L, if Override is Enabled
+        PG1IOCONLbits.OVRDAT = 1;  // 0b00 = State for PWM1H,L, if Override is Enabled
+
+        PG3IOCONLbits.OVRENH = 1;  // 1 = OVRDAT<1> provides data for output on PWM3H
+        PG3IOCONLbits.OVRENL = 1;  // 1 = PWM Generator provides data for output on PWM3L        
+        PG2IOCONLbits.OVRENH = 1;  // 1 = OVRDAT<1> provides data for output on PWM2H
+        PG2IOCONLbits.OVRENL = 1;  // 1 = PWM Generator provides data for output on PWM2L       
+        PG1IOCONLbits.OVRENH = 1;  // 1 = OVRDAT<1> provides data for output on PWM1H     
+        PG1IOCONLbits.OVRENL = 1;  // 1 = PWM Generator provides data for output on PWM1L    
+                      
+        piInputOmega.piState.integrator = 0;
+        piInputIq.piState.integrator = 0;
+        piInputId.piState.integrator = 0;           
+    }
+//------------------------------------------------------------------------------------    
+//   For ReGen mode, the motor will be locked when the speed is less than ReGenSpeed
+//------------------------------------------------------------------------------------
+#ifdef MotorReGenLock    
+    else if((uGF.ReGenFlag == 1) && (abs(Speed) < ReGenSpeed))  // Motor UVW shorted
+    {   
+
+        // low side turns on, high side off
+        PG3IOCONLbits.OVRDAT = 1;  // 0b00 = State for PWM3H,L, if Override is Enabled
+        PG2IOCONLbits.OVRDAT = 1;  // 0b00 = State for PWM2H,L, if Override is Enabled
+        PG1IOCONLbits.OVRDAT = 1;  // 0b00 = State for PWM1H,L, if Override is Enabled
+
+        PG3IOCONLbits.OVRENH = 1;  // 1 = OVRDAT<1> provides data for output on PWM3H
+        PG3IOCONLbits.OVRENL = 0;  // 0 = PWM Generator provides data for output on PWM3L        
+        PG2IOCONLbits.OVRENH = 1;  // 1 = OVRDAT<1> provides data for output on PWM2H
+        PG2IOCONLbits.OVRENL = 0;  // 0 = PWM Generator provides data for output on PWM2L       
+        PG1IOCONLbits.OVRENH = 1;  // 1 = OVRDAT<1> provides data for output on PWM1H     
+        PG1IOCONLbits.OVRENL = 0;  // 0 = PWM Generator provides data for output on PWM1L    
+
+        INVERTERA_PWM_PDC3 = 1500;      // "High side" duty
+        INVERTERA_PWM_PDC2 = 1500;
+        INVERTERA_PWM_PDC1 = 1500;        
+        
+        
+        piInputOmega.piState.integrator = 0;
+        piInputIq.piState.integrator = 0;
+        piInputId.piState.integrator = 0;              
+                    
+    }
+ #endif     
+//------------------------------------------------------------------------------   
+
+  
+    else
+    {
+        INVERTERA_PWM_PDC3 = pwmDutycycle.dutycycle1; //Phase A
+        INVERTERA_PWM_PDC2 = pwmDutycycle.dutycycle3; //Phase C 
+        INVERTERA_PWM_PDC1 = pwmDutycycle.dutycycle2; //Phase B         
+        HAL_MC1PWMEnableOutputs();  
+    }
+    
+    OvervoltageDetect();
+   // if(startUpCounter > 1000)
+   //     UndervoltageDetect();
+    
+   // OvertemperatureDetectMCU();
+    OvertemperatureDetectMOSFET();
+    X2CPG1Duty = INVERTERA_PWM_PDC1;
+    X2CPG2Duty = INVERTERA_PWM_PDC2;
+    X2CPG3Duty = INVERTERA_PWM_PDC3;    
+    DiagnosticsStepIsr();
+    
+    // Clear Interrupt Flag 
+    ClearADCIF();
+}
+
+// *****************************************************************************
+/* Function:
+    InitControlParameters()
+
+  Summary:
+    Function initializes control parameters
+
+  Description:
+    Initialize control parameters: PI coefficients, scaling constants etc.
+
+  Precondition:
+    None.
+
+  Parameters:
+    None
+
+  Returns:
+    None.
+
+  Remarks:
+    None.
+ */
+void InitControlParameters(void)
+{
+    /* ADC - Measure Current & Pot */
+    /* Scaling constants: Determined by calibration or hardware design.*/
+    readADCParm.qK = KPOT;
+    measCurrParm.qKa = KCURRA;
+    measCurrParm.qKb = KCURRB;
+
+    ctrlParm.qRefRamp = SPEEDREFRAMP;
+    ctrlParm.speedRampCount = SPEEDREFRAMP_COUNT;
+
+    /* Set PWM period to Loop Time */
+    pwmPeriod = LOOPTIME_TCY;
+
+    /* PI - Id Current Control */
+    piInputId.piState.kp = D_CURRCNTR_PTERM;
+    piInputId.piState.ki = D_CURRCNTR_ITERM;
+    piInputId.piState.kc = D_CURRCNTR_CTERM;
+    piInputId.piState.outMax = D_CURRCNTR_OUTMAX;
+    piInputId.piState.outMin = -piInputId.piState.outMax;
+    piInputId.piState.integrator = 0;
+    piOutputId.out = 0;
+
+    /* PI - Iq Current Control */
+    piInputIq.piState.kp = Q_CURRCNTR_PTERM;
+    piInputIq.piState.ki = Q_CURRCNTR_ITERM;
+    piInputIq.piState.kc = Q_CURRCNTR_CTERM;
+    piInputIq.piState.outMax = Q_CURRCNTR_OUTMAX;
+    piInputIq.piState.outMin = -piInputIq.piState.outMax;
+    piInputIq.piState.integrator = 0;
+    piOutputIq.out = 0;
+
+    /* PI - Speed Control */
+    piInputOmega.piState.kp = SPEEDCNTR_PTERM;
+    piInputOmega.piState.ki = SPEEDCNTR_ITERM;
+    piInputOmega.piState.kc = SPEEDCNTR_CTERM;
+    piInputOmega.piState.outMax = SPEEDCNTR_OUTMAX;
+    piInputOmega.piState.outMin = -piInputOmega.piState.outMax;
+    piInputOmega.piState.integrator = 0;
+    piOutputOmega.out = 0;
+}
+
+// ************************************************************************
+/* Function:
+    MeasCurrOffset()
+
+  Summary:
+    Routine initializes Offset values of current
+  Precondition:
+    None.
+
+  Parameters:
+    None
+
+  Returns:
+    None.
+
+  Remarks:
+    None.
+ */
+void MeasCurrOffset(int16_t *pOffseta,int16_t *pOffsetb)
+{
+    int32_t adcOffsetIa = 0, adcOffsetIb = 0;
+    uint16_t i = 0;
+
+    /* Enable ADC interrupt and begin main loop timing */
+    ClearADCIF();
+    adcDataBuffer = ClearADCIF_ReadADCBUF();
+
+    /* Taking multiple sample to measure voltage offset in all the channels */
+      
+    for (i = 0; i < (1<<CURRENT_OFFSET_SAMPLE_SCALER); i++)
+    {
+        while(!_ADCAN17IF);       
+        //measCurrOffsetFlag = 0;
+        /* Wait for the conversion to complete */
+        //while (measCurrOffsetFlag == 0);
+        /* Sum up the converted results */
+        adcOffsetIa += (int16_t) ADCBUF_INV_A_IPHASE1;
+        adcOffsetIb += (int16_t) ADCBUF_INV_A_IPHASE2;
+        ClearADCIF();
+    }
+    /* Averaging to find current Ia offset */
+    *pOffseta = (int16_t)(adcOffsetIa >> CURRENT_OFFSET_SAMPLE_SCALER);
+    /* Averaging to find current Ib offset*/
+    *pOffsetb = (int16_t)(adcOffsetIb >> CURRENT_OFFSET_SAMPLE_SCALER);
+    measCurrOffsetFlag = 0;     
+
+}
+
+//void __attribute__((interrupt, no_auto_psv)) _CNCInterrupt()
+//{
+//    CNRead_Inline();
+//}
+
+void CMP1_ISR(void)
+{
+    if (faultOverCurrent.counter > OVERCURRENT_COUNTER)
+    {
+        ResetParmeters();
+        faultOverCurrent.counter = 0;
+    }
+    faultOverCurrent.counter++;
+}
+
+void UndervoltageDetect(void)
+{
+    
+    faultUndervoltage.measure = ADCBUF_VOLTAGE;
+    faultUndervoltage.monitor = (faultUndervoltage.measure >> 6);
+    
+    if(faultUndervoltage.monitor < VOLTAGE_LIMITER)
+    {
+        faultUndervoltage.counter++;
+        
+        if(faultUndervoltage.counter > UNDERVOLTAGE_COUNTER)
+        {
+            ResetParmeters();
+            faultUndervoltage.counter  = 0;
+        }
+    }
+}
+void VoltageDetect(void)
+{
+    faultUndervoltage.measure = ADCBUF_VOLTAGE;
+}
+void OvervoltageDetect(void)
+{
+    
+    faultOvervoltage.measure = ADCBUF_VOLTAGE;
+    faultOvervoltage.monitor = (faultOvervoltage.measure >> 6);
+    if(faultOvervoltage.monitor > OVERVOLTAGE_LIMITER)
+    {
+        faultOvervoltage.counter++;
+        
+        if(faultOvervoltage.counter > OVERVOLTAGE_COUNTER)
+        {
+                faultOvervoltage.counter = OVERVOLTAGE_COUNTER;
+                FaultFlags.Overvoltage = 1;
+                uGF.Fault = 1;
+        }
+    }
+}
+void OvertemperatureDetectMCU(void)
+{
+    /*
+    faultOverTempMCU.measure = ADCBUF_TEMPERATURE_MCU;
+    faultOverTempMCU.monitor = (faultOverTempMCU.measure >> 6);
+    
+    if(faultOverTempMCU.monitor < OVERTEMP_LIMITER_57)
+    {
+        faultOverTempMCU.counter++;
+        
+        if(faultOverTempMCU.counter > OVERTEMP_COUNTER)
+        {
+            ResetParmeters();
+            faultOverTempMCU.counter = 0;
+        }
+    }
+      
+    if(faultOverTempMCU.monitor < OVERTEMP_LIMITER_35)
+    {
+        faultOverTempMCU.counter++;
+        
+        if(faultOverTempMCU.counter> OVERTEMP_COUNTER)
+        {
+            faultOverTempMCU.indicator = (faultOverTempMCU.monitor >> 1);
+        }
+    }
+    */
+}
+
+void OvertemperatureDetectMOSFET(void)
+{
+
+    faultOverTempMOSFET.measure = ADCBUF_TEMPERATURE_MOSFET;
+    faultOverTempMOSFET.monitor = (faultOverTempMOSFET.measure >> 6);
+    
+    if(faultOverTempMOSFET.monitor < OVERTEMP_MOSFET_80)
+    {
+        faultOverTempMOSFET.counter++;
+        
+        if(faultOverTempMOSFET.counter > OVERTEMP_COUNTER)
+        {
+            //ResetParmeters();
+            faultOverTempMOSFET.counter = 0;
+            FaultFlags.MOSOverHeat = 1;
+            uGF.Fault = 1;            
+        }
+    }
+}
+
+
+
+void CNRead_Inline(void)
+{
+  
+    HallState = (unsigned int)HALL_A + ((unsigned int)HALL_B * 2) + ((unsigned int)HALL_C * 4);
+    if(OldHallState != HallState)
+    {
+        TMRLatch = TMR1;
+        TMR1 = 0;   
+        T1INTCnt = 0;       
+        HallPeriod= TMRLatch;                 
+        GetHallAngleAuto_Inline();              // OldHallState updates here.
+        //PeriodTemp += ((long int)TMR2Latch - (long int)PeriodTemp) * ;
+        
+        DeltaT_Array[DeltaT_Index++] = HallPeriod;
+        if(DeltaT_Index >= 8)
+            DeltaT_Index = 0;
+        DeltaT_Sum = DeltaT_Array[0] + DeltaT_Array[1]+DeltaT_Array[2] \
+                +DeltaT_Array[3]+DeltaT_Array[4]+DeltaT_Array[5] \
+                +DeltaT_Array[6]+ DeltaT_Array[7];
+        PeriodAverage = DeltaT_Sum >> 3;
+        
+        // Used by SVPWN angle
+        HallPeriodFiltered = PeriodAverage;
+        // Test another filter
+        //FilteredHallPeriod= FracMpy(HallPeriod, Q15(0.1)) + FracMpy(FilteredHallPeriod,Q15(0.9));
+//        HallPeriodFiltered= FracMpy(HallPeriod, Q15(0.1)) + FracMpy(HallPeriodFiltered,Q15(0.9));
+//        if(HallPeriodFiltered < HallMinPeriod)
+//            HallPeriodFiltered = HallMinPeriod;
+        
+        
+        if((HallPeriodFiltered > HallMinPeriod) && (T1INTCnt == 0))
+        {
+
+             Speed = __builtin_divf(HallMinPeriod,HallPeriodFiltered);
+        }
+        else if(HallPeriod <=  HallMinPeriod)
+        {
+            Speed = 32767;
+        }         
+//---------Optional(speed mode), depends on the BLDC motor direction -----------
+//        if(uGF.DirectionDefault == 0)       // Configure speed direction sign
+//           Speed = -Speed; 
+//------------------------------------------------------------------------------       
+//        if(TMRLatch >= 32767)
+//            Speed = 0;
+
+        if(uGF.Direction != uGF.DirectionDefault)
+            Speed = -Speed;        
+        
+        HallPulses++; 
+    }
+    if(HallPulsesLatch < MotorStartSpeedPulses)
+        Speed = 0;
+        
+}
+//------------------------------------------------------------------------------
+//  1:64 scale
+//  interrupt: 65535/(100MIPS/64) = 0.042 sec
+//  if T1INTCnt = 10, 0.42 sec --> No hall edge happens --> speed = 0;
+//------------------------------------------------------------------------------
+void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
+{
+/* Interrupt Service Routine code goes here */
+    IFS0bits.T1IF = 0; //Clear Timer2 interrupt flag
+    if(++T1INTCnt >= 20)
+    {
+        T1INTCnt = 20;
+        Speed = 0;
+    }
+        
+
+}
+void SetupTimer1(void)
+{
+    T1CONbits.TON = 0; // Disable Timer
+    T1CONbits.TCS = 0; // Select internal instruction cycle clock
+    T1CONbits.TGATE = 0; // Disable Gated Timer mode
+//    T1CONbits.TCKPS = 0b11; // Select 1:256 Pre-scaler
+    T1CONbits.TCKPS = 2; // 1:64
+//    T1CONbits.TCKPS = 1; //1:8
+    TMR1 = 0x00; // Clear timer register
+    PR1 = 0xFFFF; //    
+    IPC0bits.T1IP = 2; // Set Timer Interrupt Priority Level
+    IFS0bits.T1IF = 0; // Clear Timer Interrupt Flag
+    IEC0bits.T1IE = 1; // Enable Timer interrupt
+    T1CONbits.TON = 1; // Start Timer       
+}
+//------------------------------------------------------------------------------
+// Motor Stall Detect
+// Executed in main() @50Hz
+//------------------------------------------------------------------------------
+void MotorStallDetect(void)
+{
+    if(uGF.CtrlMode == 0)
+    {
+        if ((Speed == 0) && (piInputOmega.inReference != 0))
+        {
+            if(faultMotorStall.counter++ > MOTOR_STALL_CNTR )
+            {
+                faultMotorStall.counter = MOTOR_STALL_CNTR;
+                FaultFlags.MotorStall = 1;
+                uGF.Fault = 1;
+            }
+                
+        }        
+    }
+
+}
+void ClearAllFault(void)
+{
+    uGF.Fault = 0;
+    FaultFlags.MotorStall = 0;
+    FaultFlags.Overvoltage = 0;
+    FaultFlags.MOSOverHeat = 0;
+    faultMotorStall.counter = 0;
+    faultOvervoltage.counter = 0;
+}
+/*
+ End of File
+ */

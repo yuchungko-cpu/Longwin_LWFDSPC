@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motor Stall / EMB / UVW Lock / Speed Profile Change Log</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2933;
+      --muted: #5f6b7a;
+      --line: #d9dee7;
+      --panel: #f7f9fc;
+      --accent: #1565c0;
+      --ok: #1b7f4c;
+      --warn: #a86400;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft JhengHei", Arial, sans-serif;
+      color: var(--ink);
+      background: #fff;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+
+    header {
+      border-bottom: 2px solid var(--line);
+      margin-bottom: 28px;
+      padding-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+      color: #14213d;
+    }
+
+    h2 {
+      margin: 30px 0 12px;
+      font-size: 20px;
+      color: #14213d;
+      border-left: 4px solid var(--accent);
+      padding-left: 10px;
+    }
+
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 16px;
+      color: #26374a;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    ul {
+      margin: 8px 0 16px 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+      background: #edf2f7;
+      border: 1px solid #dbe3ec;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #edf4ff;
+      color: #19324d;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .summary {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin: 18px 0 22px;
+    }
+
+    .tag {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-right: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .ok {
+      color: var(--ok);
+    }
+
+    .warn {
+      color: var(--warn);
+    }
+
+    .file {
+      font-family: Consolas, "Courier New", monospace;
+      color: #0b5cad;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Motor Stall / EMB / UVW Lock / Speed Profile Change Log</h1>
+    <p class="meta">Project: <code>Longwin_LWFDSPC_V0.0</code> / Generated: 2026-07-08</p>
+  </header>
+
+  <section class="summary">
+    <p><span class="tag">Scope</span>本文件整理本輪針對馬達堵轉、EMB、UVW lock、相電流尖峰、速度 profile CPU 負載，以及電流限制設定所做的韌體修改。</p>
+    <p><span class="tag">Build</span><span class="ok">目前 MPLAB make build 已通過。</span>僅剩既有 warning：<code>optimization may eliminate reads and/or writes to register variables</code>。</p>
+  </section>
+
+  <h2>1. Motor Stall 保護行為</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>項目</th>
+        <th>修改內容</th>
+        <th>主要檔案</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>堵轉判斷</td>
+        <td>由單純 <code>Speed == 0</code> 改為近零速門檻判斷，避免輪子靠牆時微小晃動造成偵測太嚴格。</td>
+        <td class="file">src/userparms.h<br>main.c</td>
+      </tr>
+      <tr>
+        <td>8 秒降流</td>
+        <td>堵轉持續 <code>400 x 20ms = 8s</code> 後，最大相電流命令降為目前限制的 50%。</td>
+        <td class="file">src/userparms.h<br>main.c</td>
+      </tr>
+      <tr>
+        <td>60 秒鎖定</td>
+        <td>堵轉持續 <code>3000 x 20ms = 60s</code> 後設定 <code>FaultFlags.MotorStall</code> 並停止輸出。</td>
+        <td class="file">src/userparms.h<br>main.c</td>
+      </tr>
+      <tr>
+        <td>油門歸零解鎖</td>
+        <td>馬達堵轉 fault 已鎖定時，油門歸零會清除 motor stall latch，並呼叫輸出清零流程。</td>
+        <td class="file">main.c</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>2. Motor Lock Test Mode</h2>
+  <ul>
+    <li>新增 <code>CODESW_MOTOR_LOCK_TEST_ENABLE</code>，預設為 <code>0</code>，避免 production build 誤開。</li>
+    <li>新增 <code>CODESW_MOTOR_LOCK_TEST_PHASE_CURRENT_A</code>，測試模式限制最大 phase current 為 <code>5A</code>。</li>
+    <li>測試模式下 EMB 會保持 lock，用來模擬馬達堵轉狀態。</li>
+    <li>測試模式下 8 秒堵轉降流後，5A 會再乘 50%，等效約 <code>2.5A</code>。</li>
+  </ul>
+
+  <h2>3. EMB 相關修改</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>問題</th>
+        <th>處理</th>
+        <th>狀態</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>懷疑 EMB lock 造成 throttle release current spike</td>
+        <td>曾加入 EMB lock 前清 motor command 的邏輯，並短暫做 EMB disabled 隔離測試。</td>
+        <td>已確認 spike 不是 EMB 造成。</td>
+      </tr>
+      <tr>
+        <td>EMB locked + 0 RPM 時偶爾 phase current 停在 1~2A</td>
+        <td>在 throttle / VR 更新後再次檢查 <code>EMBRAKER_STATE_LOCKED</code>；若 target RPM 為 0，呼叫 <code>MotorStallForceOutputZero()</code>，避免後段流程把 <code>uGF.Coast</code> 打回 0。</td>
+        <td>待實車再次確認。</td>
+      </tr>
+      <tr>
+        <td>EMB disabled test build</td>
+        <td>測試時曾將 <code>CODESW_EMBRAKER_ENABLE</code> 改為 0 並保持 OEMB release；測試結束後已恢復 <code>1</code>。</td>
+        <td>已恢復 normal mode。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. UVW Lock 修改</h2>
+  <p>實測確認 throttle release 的 current spike 由 UVW low-speed lock / 三相短路進入瞬間引起。後續未關閉 UVW lock，而是調整進入條件。</p>
+  <ul>
+    <li><code>CODESW_UVW_LOCK_ENABLE</code> 目前為 <code>1</code>，UVW lock 仍啟用。</li>
+    <li>進入條件增加 <code>ReferenceRAW == 0</code>、<code>ctrlParm.qVelRef == 0</code>、低速、低 <code>Id/Iq</code>。</li>
+    <li>需要連續穩定 <code>500ms</code> 後才允許 <code>uGF.UVWLock = 1</code>。</li>
+    <li><code>UVW_LOCK_ENTRY_CNTR</code> 已配合 speed profile task 改為 <code>500</code>，代表 <code>500 x 1ms = 500ms</code>。</li>
+  </ul>
+
+  <h2>5. Speed Profile CPU 負載</h2>
+  <p>原本 throttle / speed profile / outer speed PI 在 ADC ISR 中每 <code>50us</code> 執行一次，對 high-level speed command 來說過快。</p>
+  <ul>
+    <li>新增 <code>s_u32LastSpeedProfileTimeMs</code> gate。</li>
+    <li>throttle、acc/deacc profile、outer speed PI、UVW lock debounce 改為 <code>1ms</code> 執行一次。</li>
+    <li>D/Q current loop、Park/Clarke、SVPWM、PWM update 仍保持 ADC ISR fast loop。</li>
+    <li>RD13 speed profile debug pulse 現在代表 1ms profile task 的執行時間。</li>
+  </ul>
+
+  <h2>6. Max Phase Current / Torque Limit</h2>
+  <ul>
+    <li>目前真正限制 phase current command 的主路徑是 <code>piInputOmega.piState.outMax/outMin</code>，也就是 speed PI output limit。</li>
+    <li>該 output 會成為 <code>ctrlParm.qVqRef</code>，再作為 <code>piInputIq.inReference</code>。</li>
+    <li>normal temperature zone 目前使用 <code>LOGIC_TEMP_CONTROLLER_RATIO_NORMAL = 0.31f</code>，以 <code>RATED_CURRENT = 50A</code> 計算約 <code>15.5A</code>。</li>
+    <li><code>piInputIq.piState.outMax</code> 是 Iq current PI 的 voltage output limit，不是 phase current command limit。</li>
+  </ul>
+
+  <h2>7. RATED_CURRENT 單一來源整理</h2>
+  <p>為避免維護混淆，<code>RATED_CURRENT</code> 現在只保留在：</p>
+  <p class="file">src/longwin/codeSw.h</p>
+  <ul>
+    <li>移除 <code>main.c</code> 裡 disabled <code>#if 0</code> 區塊中的假定義。</li>
+    <li>清掉 <code>main.c</code> 內重複 include 的 <code>codeHw.h</code> / <code>codeSw.h</code>。</li>
+    <li>之後若要調整額定電流，只需修改 <code>codeSw.h</code>。</li>
+  </ul>
+
+  <h2>8. main.c cleanup</h2>
+  <ul>
+    <li>移除未使用的 <code>MOTOR_STALL_IQ_DETECT_THRESHOLD</code>。</li>
+    <li>移除主迴圈內未使用的 Longwin floating point test 計算，避免每圈執行 float multiply/divide。</li>
+    <li>將 <code>temp_qref_pow_q15</code> 從 <code>volatile</code> local 變數改為一般 local 變數。</li>
+    <li>當 <code>CODESW_UNIFIED_LED_LOGIC_ENABLE == 1</code> 時，不再於 ADC ISR 增加舊 LED counter。</li>
+    <li>保留 <code>a_Reg</code> accumulator A 綁定，但移除 <code>volatile</code>，已消除 XC16 register-variable warning。</li>
+  </ul>
+
+  <h2>9. 仍需注意 / 後續建議</h2>
+  <ul>
+    <li><span class="warn">命名改善：</span><code>i16CurrentLimitA</code> 實際是 Q15 ratio，不是真正 Amp 值，建議後續改名為 <code>i16CurrentLimitQ15</code>。</li>
+    <li><span class="warn">函式命名：</span><code>MotorStallForceOutputZero()</code> 目前被用作通用 motor output zero helper，名稱可再整理。</li>
+    <li><span class="warn">效能優化：</span>throttle voltage-to-RPM mapping 仍可進一步用 cache 或預先計算 gain，降低 runtime division。</li>
+    <li><span class="warn">實車驗證：</span>EMB locked + 0 RPM 時 phase current 是否穩定歸零仍建議再測。</li>
+  </ul>
+</main>
+</body>
+</html>
