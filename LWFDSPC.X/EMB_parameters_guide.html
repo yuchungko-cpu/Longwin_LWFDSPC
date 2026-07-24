@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMB 電磁煞車參數使用說明 — LWFDSPC</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.65; }
+  .wrap { max-width:1000px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 28px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:20px 24px; margin:0 0 20px; }
+  h2 { font-size:1.28rem; margin:0 0 14px; border-left:4px solid var(--accent);
+       padding-left:10px; }
+  h3 { font-size:1.03rem; margin:20px 0 8px; color:var(--accent); }
+  code { background:var(--code); padding:1px 6px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.88em; color:#ffd580; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow-x:auto; font-family:Consolas,monospace;
+        font-size:.86rem; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.88rem; }
+  th,td { border:1px solid var(--border); padding:8px 10px; text-align:left;
+          vertical-align:top; }
+  th { background:rgba(78,161,255,.1); }
+  td.c { text-align:center; white-space:nowrap; }
+  ul { margin:8px 0; padding-left:22px; }
+  li { margin:5px 0; }
+  .file { color:var(--muted); font-family:Consolas,monospace; font-size:.82rem; }
+  .pill { display:inline-block; font-size:.72rem; font-weight:700; padding:2px 9px;
+          border-radius:20px; }
+  .pill.on { background:rgba(63,185,80,.18); color:var(--ok); }
+  .pill.off{ background:rgba(159,176,192,.15); color:var(--muted); }
+  .knob { color:var(--warn); font-weight:700; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .flow { font-family:Consolas,monospace; font-size:.82rem; white-space:pre; }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EMB 電磁煞車 — 參數使用說明</h1>
+  <p class="sub">專案:Longwin_LWFDSPC_V0.1 &nbsp;|&nbsp; 模組:<span class="file">src/longwin/s_logic_embraker.[ch]</span> &nbsp;|&nbsp; 更新:2026-07-23</p>
+
+  <!-- 動作準則 -->
+  <div class="card">
+    <h2>1. EMB 動作準則(狀態機)</h2>
+    <p>EMB 只在 <code>WAITING_TO_LOCK</code>(鬆油門、馬達準備停止)狀態判斷是否鎖定。共有三條鎖定路徑,由上到下優先:</p>
+    <table>
+      <tr><th>優先</th><th>條件</th><th>動作</th><th>對應參數</th></tr>
+      <tr><td class="c">—</td><td>重新給油門 <code>bIsActive</code>(命令 &gt; 釋放門檻)</td><td>釋放煞車,回 RELEASED</td><td><code>EMBRAKER_RELEASE_THRESHOLD_FWD/REV</code></td></tr>
+      <tr><td class="c">1</td><td><b>倒溜</b> <code>bReverseEdgeDetected</code>(反向霍爾邊緣)</td><td><b>立即鎖定</b></td><td>—(即時)</td></tr>
+      <tr><td class="c">2</td><td><b>UVW lock 生效</b> <code>bUVWLockActive</code></td><td>起算計時 → 達延遲 → <b>強制鎖定</b></td><td class="knob"><code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code></td></tr>
+      <tr><td class="c">3</td><td><b>failsafe</b>:UVW lock 未生效 + 命令歸零 + 逾時</td><td><b>強制鎖定</b></td><td><code>EMBRAKER_LOCK_TIMEOUT_MS</code></td></tr>
+    </table>
+    <div class="flow">RELEASED ──鬆油門──▶ WAITING_TO_LOCK ──┬─ 倒溜 ───────────────────────▶ LOCKED
+                                      ├─ UVW lock 生效 → 延遲 DELAY_MS ─▶ LOCKED   (主路徑)
+                                      └─ UVW未生效 → 逾時 TIMEOUT_MS ──▶ LOCKED   (failsafe)</div>
+    <div class="note">路徑 2 的計時從「<b>UVW lock 生效的當下</b>」起算,不是從鬆油門起算。路徑 3 的逾時則從<b>鬆油門</b>起算。兩者互斥:UVW lock 生效走路徑 2,沒生效才走路徑 3。</div>
+  </div>
+
+  <!-- 功能開關 -->
+  <div class="card">
+    <h2>2. 功能開關</h2>
+    <p class="file">src/longwin/codeSw.h</p>
+    <table>
+      <tr><th>開關</th><th>現值</th><th>說明</th></tr>
+      <tr><td><code>CODESW_EMBRAKER_ENABLE</code></td><td class="c"><span class="pill on">1 啟用</span></td><td>EMB 邏輯總開關。0 時完全不編入,停車僅靠 UVW lock 相位短路</td></tr>
+      <tr><td><code>CODESW_EMBRAKER_USE_ADC_INPUT</code></td><td class="c"><span class="pill off">0</span></td><td>IEMB 輸入來源。1=RD8 ADC 輸入;0=數位開關輸入</td></tr>
+      <tr><td><code>CODESW_EMBRAKER_TEST</code></td><td class="c"><span class="pill off">0</span></td><td>1=未接實體手煞車的測試模式;0=實機模式</td></tr>
+    </table>
+  </div>
+
+  <!-- 動作參數 -->
+  <div class="card">
+    <h2>3. 動作參數(可調)</h2>
+    <p class="file">src/longwin/s_logic_embraker.h</p>
+    <table>
+      <tr><th>參數</th><th>現值</th><th>單位</th><th>說明</th></tr>
+      <tr>
+        <td class="knob"><code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code></td>
+        <td class="c">1000</td><td class="c">ms</td>
+        <td><b>★ 主要旋鈕。</b>UVW lock 生效後延遲多久才鎖 EMB。延遲要足夠讓馬達由 UVW 短路減速到完全停止,避免帶速鎖定造成騎乘震動。</td>
+      </tr>
+      <tr>
+        <td><code>EMBRAKER_LOCK_TIMEOUT_MS</code></td>
+        <td class="c">1000</td><td class="c">ms</td>
+        <td>failsafe:鬆油門後超過此時間仍未鎖(例如霍爾異常導致 UVW lock 從未生效)則強制鎖,確保 EMB 不會永遠不鎖。</td>
+      </tr>
+      <tr>
+        <td><code>EMBRAKER_RELEASE_THRESHOLD_FWD</code><br><code>EMBRAKER_RELEASE_THRESHOLD_REV</code></td>
+        <td class="c">1600<br>1600</td><td class="c">命令值</td>
+        <td>馬達命令超過此值才「釋放」煞車讓馬達可轉。正/反轉可分開設。</td>
+      </tr>
+      <tr>
+        <td><code>EMBRAKER_FAULT_THRESHOLD_MV</code></td>
+        <td class="c">1500</td><td class="c">mV</td>
+        <td>IEMB 腳位電壓低於此值判定煞車感測器故障(A19),進入 FAULT 狀態並鎖定。</td>
+      </tr>
+      <tr>
+        <td><code>EMBRAKER_DIVIDER_R1</code> / <code>_R2</code></td>
+        <td class="c">10k / 100k</td><td class="c">Ω</td>
+        <td>IEMB 分壓電阻,用於 ADC 值換算 mV。依實際硬體設定。</td>
+      </tr>
+    </table>
+    <h3>已停用(保留定義供參考)</h3>
+    <table>
+      <tr><th>參數</th><th>說明</th></tr>
+      <tr><td><code>EMBRAKER_LOCK_SPEED_KMH_X10</code></td><td>舊版「低於此車速鎖定」門檻。現行準則改用時間,不再比較速度。</td></tr>
+    </table>
+  </div>
+
+  <!-- 相依 UVW lock 參數 -->
+  <div class="card">
+    <h2>4. 相依參數:UVW lock(決定路徑 2 何時觸發)</h2>
+    <p>EMB 主路徑靠 <code>bUVWLockActive</code> 觸發,而 UVW lock 何時生效由以下參數決定。<span class="file">src/userparms.h</span></p>
+    <table>
+      <tr><th>參數</th><th>現值</th><th>說明</th></tr>
+      <tr><td><code>UVW_LOCK_STOP_PULSES</code></td><td class="c">7</td><td>進鎖脈衝門檻:<code>HallPulsesLatch &lt; 此值</code> 視為接近靜止(7 ≈ 馬達 58 RPM,極對數 12)。<b>已與 ReGen 的 BrakeStopSpeedPulses 分開</b>,調此值不影響 ReGen 起煞點。</td></tr>
+      <tr><td><code>UVW_LOCK_ENTRY_CNTR</code></td><td class="c">30</td><td>進鎖 debounce:命令歸零 + 低速連續 30 × 1ms = 30ms 才 latch。</td></tr>
+      <tr><td><code>UVW_LOCK_RELEASE_REF</code></td><td class="c">500</td><td>解鎖門檻:油門目標 |TargetRpm| ≥ 此值則解除 UVW lock(遲滯)。</td></tr>
+    </table>
+    <div class="note">換算關係:<code>pulses/100ms = 馬達RPM × 極對數(12) / 100</code>。<code>HallPulsesLatch</code> 每 100ms 更新一次,是「過去 100ms 的霍爾脈衝數」。</div>
+  </div>
+
+  <!-- 調整指引 -->
+  <div class="card">
+    <h2>5. 調整指引(常見情境)</h2>
+    <table>
+      <tr><th>症狀</th><th>調整</th></tr>
+      <tr><td>馬達還在動就夾煞車、騎乘震動</td><td><b>加大</b> <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code>(給馬達更多時間停)</td></tr>
+      <tr><td>停穩後太久才夾煞車</td><td><b>縮小</b> <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code></td></tr>
+      <tr><td>UVW lock 太晚生效(高速就想開始準備)</td><td><b>加大</b> <code>UVW_LOCK_STOP_PULSES</code>(容許較高殘速進鎖)</td></tr>
+      <tr><td>UVW lock 進太早、殘速仍高</td><td><b>縮小</b> <code>UVW_LOCK_STOP_PULSES</code></td></tr>
+      <tr><td>斜坡停車會倒溜一小段才夾</td><td>倒溜(Plan B)已即時處理;若仍不足,檢查霍爾方向偵測</td></tr>
+      <tr><td>重新給油門後煞車不放/太晚放</td><td>調 <code>EMBRAKER_RELEASE_THRESHOLD_FWD/REV</code></td></tr>
+    </table>
+    <div class="danger"><b>⚠ 安全注意:</b>目前 failsafe(<code>EMBRAKER_LOCK_TIMEOUT_MS</code>)是「UVW lock 未生效」時的唯一保底。若霍爾感測器異常導致 UVW lock 一直不 latch,EMB 僅靠此逾時鎖定。測試時務必確認霍爾故障(A04)有其他保護接手,且逾時值不要設得過長。</div>
+  </div>
+
+  <p class="foot">EMB parameters guide · LWFDSPC.X · 2026-07-23</p>
+</div>
+</body>
+</html>

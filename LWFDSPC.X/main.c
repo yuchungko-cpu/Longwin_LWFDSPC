@@ -1278,22 +1278,31 @@ int main(void) {
                 bool bEmbUVWLockActive = (uGF.UVWLock != 0);
                 bool bEmbReverseEdge = bEmbUVWLockActive && (uGF.Direction != s_u8EmbTravelDir);
 
+                // [有動力倒溜/倒衝] 用速度環的帶號命令/回授(已同座標系,見 CNRead 的 Speed 符號校正)
+                //   判斷「命令一個方向、實際往反方向動」。HallPulsesLatch 閘門排除靜止抖動/32767 尖峰。
+                bool bEmbDirMismatch =
+                    (abs(piInputOmega.inReference) >= EMB_ROLLBACK_CMD_THRESHOLD) &&
+                    (abs(piInputOmega.inMeasure) >= EMB_ROLLBACK_SPEED_THRESHOLD) &&
+                    (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES) &&
+                    (((piInputOmega.inReference > 0) && (piInputOmega.inMeasure < 0)) ||
+                     ((piInputOmega.inReference < 0) && (piInputOmega.inMeasure > 0)));
+
 #if CODESW_SCOPE_ENABLE == 1
                 E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(g_stSystemData.u16IEMBMv,
-                                                                       u16CurrentSpeedKmh_x10,
                                                                        g_stSystemData.i16TargetRpm,  // 使用者意圖轉速
                                                                        ReferenceRAW,                 // 馬達實際執行轉速
                                                                        bEmbUVWLockActive,            // [Plan A] UVW短路生效中
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
+                                                                       bEmbDirMismatch,              // [有動力倒溜] 命令/回授方向相反
                                                                        g_stSystemData.u32TimeMs);
 #endif
 #if CODESW_MODBUS_SCHEDULER_ENABLE == 1
                 E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(g_stSystemData.u16IEMBMv,
-                                                                       g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10,
                                                                        g_stSystemData.i16TargetRpm,  // 使用者意圖轉速
                                                                        ReferenceRAW,                 // 馬達實際執行轉速
                                                                        bEmbUVWLockActive,            // [Plan A] UVW短路生效中
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
+                                                                       bEmbDirMismatch,              // [有動力倒溜] 命令/回授方向相反
                                                                        g_stSystemData.u32TimeMs);
 #endif
 
@@ -1630,7 +1639,6 @@ void ResetParmeters(void) {
 void DoControl(void) {
     /* 用於計算q參考值平方根的臨時變數 */
     int16_t temp_qref_pow_q15;
-    static uint16_t s_u16UvwLockEntryCounter = 0;
     static uint32_t s_u32LastSpeedProfileTimeMs = 0;
     bool bRunSpeedProfileTask = false;
 
@@ -1945,6 +1953,21 @@ void DoControl(void) {
         piInputOmega.inMeasure = Speed;
         piInputOmega.inReference = ctrlParm.qVelRef;
 
+        // [FIX] 鬆油門邊緣(TargetRpm 非0→0)清一次速度環積分器：
+        //   行駛時積分器累積正值以維持前進；鬆油門後若不清，低速時 Speed 逾時歸零
+        //   → error=0 → PI 輸出=殘留正積分 → 微幅前進 creep。只在放開瞬間清一次即可，
+        //   停車階段積分只會往煞車方向累積、不會再產生前進命令，故不需每 cycle 清。
+        {
+            static bool s_bPrevThrottleReleased = false;
+            bool bThrottleReleased = (g_stSystemData.i16TargetRpm == 0);
+            if (bThrottleReleased && !s_bPrevThrottleReleased) {
+                piInputOmega.piState.integrator = 0;  // 速度環:每次放開都清(消前進 creep)
+                // 註:電流環積分器不在此清(有速度放開會造成扭力瞬斷/抖動)。頂牆放開的反向
+                //   驅動改由輸出級「近停放開強制 coast」處理(見下方 bStallReleaseCoast)。
+            }
+            s_bPrevThrottleReleased = bThrottleReleased;
+        }
+
         MC_ControllerPIUpdate_Assembly(piInputOmega.inReference,
                                        piInputOmega.inMeasure, &piInputOmega.piState,
                                        &piOutputOmega.out);
@@ -1972,23 +1995,40 @@ void DoControl(void) {
         //   改為：只要駕駛重新給出明顯的油門目標(TargetRpm >= 門檻)，立即解除 UVW
         //   短路，恢復即時加速反應。單純停車時 TargetRpm≈0，行為與原本相同。
 #if CODESW_UVW_LOCK_ENABLE
-        if ((ReferenceRAW == 0) &&
-            (ctrlParm.qVelRef == 0) &&
-            (abs(piInputOmega.inMeasure) < UVW_LOCK_SPEED_THRESHOLD) &&
-            (abs(g_stSystemData.i16TargetRpm) < UVW_LOCK_SPEED_THRESHOLD) &&
-            (abs(idq.q) < UVW_LOCK_CURRENT_THRESHOLD) &&
-            (abs(idq.d) < UVW_LOCK_CURRENT_THRESHOLD)) {
-            if (s_u16UvwLockEntryCounter < UVW_LOCK_ENTRY_CNTR) {
-                s_u16UvwLockEntryCounter++;
-            } else {
-                uGF.UVWLock = 1;
+        // [FIX] 進/出鎖改為命令驅動的遲滯 (hysteresis)，解決零速 hunting 死結：
+        //   舊版把 idq.q/idq.d(量測電流)放進進場條件，但空載 0 命令下 FOC 會持續
+        //   灌電流對抗左右抖動，idq 不斷超標 → 計數器每 cycle 歸零 → UVWLock 永遠
+        //   latch 不了 → 短路接不上 → 抖動持續。唯一能讓馬達安靜的就是短路本身。
+        //   新規則(依需求)：速度命令已到 0 且實際速度接近 0，即可進行 UVW lock。
+        //     進鎖 — ReferenceRAW/qVelRef==0(命令已歸零) 且 已接近靜止，即立即接上
+        //            短路(已移除 30ms debounce)；不再看 idq。
+        //     出鎖 — 僅在駕駛重新給出明顯油門(|TargetRpm| >= UVW_LOCK_RELEASE_REF)時
+        //            解除，形成遲滯，避免抖動的瞬間量測值把鎖解開。
+        // [FIX] 靜止判斷改用霍爾脈衝數 HallPulsesLatch，不用瞬時 Speed：
+        //   停車顫動時車輪在單一霍爾邊界來回，會不斷產生霍爾邊緣，
+        //   (1) 每個邊緣把 T1INTCnt 清零 → Speed 的「逾時歸零」路徑永不觸發；
+        //   (2) 極短的顫動週期 (HallPeriod<=HallMinPeriod) 會把 Speed 直接拉到 32767。
+        //   → abs(Speed) 幾乎永遠大於門檻，進鎖條件永遠不成立，UVWLock
+        //     永遠 latch 不上 → 相位接不上短路 → 持續前後抽動 (死結)。
+        //   HallPulsesLatch(每 100ms 脈衝數)是邊緣「計數」而非「數值」，對 32767
+        //   尖峰免疫；單邊界顫動的淨脈衝數很低，真正滑行才會高，剛好能區分。
+        //   用專屬門檻 UVW_LOCK_STOP_PULSES 作為「已接近靜止」判斷 (獨立於 ReGen 的
+        //   BrakeStopSpeedPulses，調整不會影響 ReGen 起煞點)。
+        bool bUvwStopCommanded = (ReferenceRAW == 0) &&
+                                 (ctrlParm.qVelRef == 0) &&
+                                 (HallPulsesLatch < UVW_LOCK_STOP_PULSES);
+        bool bUvwDriveRequested = (abs(g_stSystemData.i16TargetRpm) >= UVW_LOCK_RELEASE_REF);
+
+        if (uGF.UVWLock == 1) {
+            // 已鎖定：維持到駕駛重新給出明顯油門(遲滯)
+            if (bUvwDriveRequested) {
+                uGF.UVWLock = 0;
             }
-        } else {
-            s_u16UvwLockEntryCounter = 0;
-            uGF.UVWLock = 0;
+        } else if (bUvwStopCommanded && !bUvwDriveRequested) {
+            // 命令歸零且低速：立即進鎖 (已移除 30ms debounce)
+            uGF.UVWLock = 1;
         }
 #else
-        s_u16UvwLockEntryCounter = 0;
         uGF.UVWLock = 0;
 #endif
 
@@ -2315,11 +2355,18 @@ void DoControl(void) {
         //        pwmDutycycle.dutycycle3 = MIN_DUTY;
         //    }
 
+        // [A] 頂牆/堵轉放開後,近停且尚未 UVW 短路時,強制 coast(關 PWM)不讓 FOC 主動輸出,
+        //   避免「零速→反向」交界的換相把馬達往後主動驅動(runaway 後退 1m+)。UVW lock 一armed
+        //   即由下方短路分支接手保持。只在速度模式、油門已放開、且近停時作用 → 不影響有速度時的煞車。
+        bool bStallReleaseCoast = (uGF.CtrlMode == 0) &&
+                                  (g_stSystemData.i16TargetRpm == 0) &&
+                                  (uGF.UVWLock == 0) &&
+                                  (HallPulsesLatch < UVW_LOCK_STOP_PULSES);
 #if CODESW_BATTERY_PROTECTION_MODULE_ENABLE
         // 使用 s_logic_battery 模組的輸出禁制旗標來決定是否關閉 PWM
-        if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || logic_battery_shouldProhibitOutput()) {
+        if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast || logic_battery_shouldProhibitOutput()) {
 #else
-    if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1)) {
+    if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast) {
 #endif
             HAL_MC1PWMDisableOutputs();
             piInputOmega.piState.integrator = 0;

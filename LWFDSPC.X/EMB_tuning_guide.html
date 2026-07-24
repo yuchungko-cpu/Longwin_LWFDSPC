@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMB 電磁煞車 調參數說明(使用者版)</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.7; }
+  .wrap { max-width:960px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 26px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:20px 24px; margin:0 0 20px; }
+  h2 { font-size:1.28rem; margin:0 0 14px; }
+  h2 .n { display:inline-block; width:30px; height:30px; line-height:30px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:1rem;
+          margin-right:10px; font-weight:800; }
+  h3 { font-size:1.02rem; margin:18px 0 8px; color:var(--accent); }
+  code { background:var(--code); padding:1px 6px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.88em; color:#ffd580; }
+  .path { display:inline-block; background:#ffd23f; color:#1a1200;
+          border:2px solid #ffe082; border-radius:6px; padding:4px 12px 4px 30px;
+          font-family:Consolas,monospace; font-size:.94rem; font-weight:800;
+          position:relative; box-shadow:0 0 12px rgba(255,210,63,.45);
+          letter-spacing:.2px; }
+  .path::before { content:"\1F4C1"; position:absolute; left:8px; top:3px;
+                  font-size:1rem; filter:grayscale(.1); }
+  .path b { color:#8a1c00; }  /* 行號用深紅強調 */
+  td .path { white-space:nowrap; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow-x:auto; font-family:Consolas,monospace; font-size:.86rem; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.88rem; }
+  th,td { border:1px solid var(--border); padding:9px 11px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); }
+  td.c { text-align:center; white-space:nowrap; }
+  ul,ol { margin:8px 0; padding-left:24px; }
+  li { margin:6px 0; }
+  .step { background:var(--card2); border-radius:8px; padding:14px 18px; margin:12px 0;
+          border-left:4px solid var(--accent); }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .big { color:var(--warn); font-weight:700; }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EMB 電磁煞車 — 調參數說明</h1>
+  <p class="sub">使用者版 &nbsp;|&nbsp; 專案 LWFDSPC &nbsp;|&nbsp; 2026-07-23 &nbsp;|&nbsp; 修改參數後需<b>重新編譯燒錄</b>才生效</p>
+
+  <!-- 參數檔案位置 -->
+  <div class="card">
+    <h2><span class="n">1</span>參數檔案位置</h2>
+    <p>EMB 相關參數分散在三個檔案。調整前先認識它們:</p>
+    <table>
+      <tr><th>檔案</th><th>放什麼</th></tr>
+      <tr><td><span class="path">src/longwin/s_logic_embraker.h</span></td><td>EMB 動作參數(延遲、逾時、釋放門檻、故障電壓)— <b>最常調這個</b></td></tr>
+      <tr><td><span class="path">src/userparms.h</span></td><td>UVW lock 參數(決定 EMB 主路徑何時被觸發)</td></tr>
+      <tr><td><span class="path">src/longwin/codeSw.h</span></td><td>EMB 功能總開關</td></tr>
+    </table>
+    <div class="note">下表行號為目前版本參考值,程式改動後可能位移。<b>請以 <code>#define</code> 名稱搜尋定位</b>,不要只認行號。</div>
+  </div>
+
+  <!-- 快速對照表 -->
+  <div class="card">
+    <h2><span class="n">2</span>快速對照表:想改什麼 → 改哪裡</h2>
+    <table>
+      <tr><th>想調整的行為</th><th>參數</th><th>檔案 : 行</th><th>現值</th></tr>
+      <tr>
+        <td class="big">EMB 多久後夾煞車<br>(最主要旋鈕)</td>
+        <td><code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code></td>
+        <td><span class="path">s_logic_embraker.h : 44</span></td><td class="c">1000<br>(ms)</td>
+      </tr>
+      <tr>
+        <td>保底逾時鎖定(UVW 失效時)</td>
+        <td><code>EMBRAKER_LOCK_TIMEOUT_MS</code></td>
+        <td><span class="path">s_logic_embraker.h : 45</span></td><td class="c">1000<br>(ms)</td>
+      </tr>
+      <tr>
+        <td>油門多大才放開煞車(正轉)</td>
+        <td><code>EMBRAKER_RELEASE_THRESHOLD_FWD</code></td>
+        <td><span class="path">s_logic_embraker.h : 34</span></td><td class="c">1600</td>
+      </tr>
+      <tr>
+        <td>油門多大才放開煞車(反轉)</td>
+        <td><code>EMBRAKER_RELEASE_THRESHOLD_REV</code></td>
+        <td><span class="path">s_logic_embraker.h : 35</span></td><td class="c">1600</td>
+      </tr>
+      <tr>
+        <td>煞車感測器故障判定電壓</td>
+        <td><code>EMBRAKER_FAULT_THRESHOLD_MV</code></td>
+        <td><span class="path">s_logic_embraker.h : 33</span></td><td class="c">1500<br>(mV)</td>
+      </tr>
+      <tr>
+        <td>多低轉速才開始準備停車鎖定<br>(UVW lock 進鎖點)</td>
+        <td><code>UVW_LOCK_STOP_PULSES</code></td>
+        <td><span class="path">userparms.h : 226</span></td><td class="c">7<br>(≈58 RPM)</td>
+      </tr>
+      <tr>
+        <td>重新給油門多快解鎖</td>
+        <td><code>UVW_LOCK_RELEASE_REF</code></td>
+        <td><span class="path">userparms.h : 225</span></td><td class="c">500</td>
+      </tr>
+      <tr>
+        <td>EMB 功能開 / 關</td>
+        <td><code>CODESW_EMBRAKER_ENABLE</code></td>
+        <td><span class="path">codeSw.h : 32</span></td><td class="c">1(開)</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- 主要調整步驟 -->
+  <div class="card">
+    <h2><span class="n">3</span>最常做的調整:EMB 夾煞車的時機</h2>
+    <p>EMB 的動作邏輯是:<b>馬達轉速降到夠低(UVW lock 生效)後,再等一段時間 → 夾煞車。</b>這段等待時間就是主要旋鈕。</p>
+
+    <div class="step">
+      <b>步驟 1.</b> 開啟 <span class="path">src/longwin/s_logic_embraker.h</span>,搜尋 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code>(約第 44 行)。
+    </div>
+    <div class="step">
+      <b>步驟 2.</b> 修改數值(單位 ms,毫秒)。例如改成 1200 毫秒:
+      <pre>#define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 1200  // UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定</pre>
+    </div>
+    <div class="step">
+      <b>步驟 3.</b> 重新編譯、燒錄,實車測試停車。
+    </div>
+
+    <h3>怎麼判斷要加大還是縮小?</h3>
+    <table>
+      <tr><th>你觀察到的現象</th><th>怎麼調</th></tr>
+      <tr><td>停車時煞車太早夾下去、車身<b>抽動 / 震動</b>(馬達還在動就被夾)</td><td><b>加大</b>數值(例如 1000 → 1500),給馬達更多時間停穩</td></tr>
+      <tr><td>車已經完全停了,<b>過很久</b>煞車才夾住</td><td><b>縮小</b>數值(例如 1000 → 600)</td></tr>
+      <tr><td>停在斜坡上會<b>先倒溜一點</b>才夾</td><td>倒溜保護已自動即時處理;若仍明顯,回報我們檢查霍爾方向</td></tr>
+    </table>
+    <div class="ok"><b>建議做法:</b>從現值 1000ms 開始,每次調整 ±200~300ms,實車測試到「車一停穩、煞車立刻無震動地夾住」為止。</div>
+  </div>
+
+  <!-- 其他調整 -->
+  <div class="card">
+    <h2><span class="n">4</span>其他可調項目</h2>
+
+    <h3>A. 進鎖轉速(什麼速度算「快停了」)</h3>
+    <p>檔案 <span class="path">src/userparms.h</span> 第 226 行 <code>UVW_LOCK_STOP_PULSES</code>。這是霍爾脈衝門檻,換算關係:</p>
+    <pre>脈衝值 = 馬達RPM × 極對數(12) / 100
+現值 7 ≈ 馬達 58 RPM ;  想改 30 RPM → 設 30×12/100 ≈ 4</pre>
+    <ul>
+      <li><b>加大</b> → 較高殘速就開始準備鎖定(EMB 較早進入等待計時)</li>
+      <li><b>縮小</b> → 要更慢、更接近停止才開始</li>
+    </ul>
+    <div class="note">此參數<b>已與再生煞車(ReGen)分開</b>,調整它<b>不會</b>影響 ReGen 的起煞點。</div>
+
+    <h3>B. 油門解鎖靈敏度</h3>
+    <p>檔案 <span class="path">src/userparms.h</span> 第 225 行 <code>UVW_LOCK_RELEASE_REF</code>(現值 500)。數值越小,輕踩油門就越快解除鎖定恢復加速;越大則要踩多一點才解鎖。</p>
+
+    <h3>C. 煞車釋放門檻</h3>
+    <p>檔案 <span class="path">src/longwin/s_logic_embraker.h</span> 第 34、35 行。馬達命令超過此值才「放開」煞車讓車子能動。正轉、反轉可設不同值。</p>
+  </div>
+
+  <!-- 注意事項 -->
+  <div class="card">
+    <h2><span class="n">5</span>注意事項</h2>
+    <ul>
+      <li>所有參數都是 <code>#define</code>,<b>修改後必須重新編譯燒錄</b>才會生效,無法即時線上調。</li>
+      <li>修改時<b>只改等號後的數值</b>,不要動參數名稱與格式。</li>
+      <li>行號會隨程式改動位移,請一律用<b>參數名稱搜尋</b>定位。</li>
+    </ul>
+    <div class="danger">
+      <b>⚠ 安全提醒:</b>「保底逾時」<code>EMBRAKER_LOCK_TIMEOUT_MS</code> 是萬一轉速偵測異常(霍爾故障)時,EMB 仍能鎖定的最後防線。<b>請勿設得過長</b>,以免異常時車子長時間不上煞車。標示「(停用)」的參數請勿當作動作條件使用。
+    </div>
+  </div>
+
+  <p class="foot">EMB 調參數說明(使用者版) · LWFDSPC.X · 2026-07-23</p>
+</div>
+</body>
+</html>

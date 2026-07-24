@@ -33,11 +33,25 @@ typedef enum {
 #define EMBRAKER_FAULT_THRESHOLD_MV 1500     // IEMB 故障檢測電壓閾值 (mV)
 #define EMBRAKER_RELEASE_THRESHOLD_FWD 1600  // 正轉時，釋放煞車的馬達命令閾值
 #define EMBRAKER_RELEASE_THRESHOLD_REV 1600  // 反轉時，釋放煞車的馬達命令閾值 (可設為不同)
-#define EMBRAKER_LOCK_SPEED_KMH_X10 5       // 低於此速度(1.0km/h * 10)則鎖定煞車
-#define EMBRAKER_LOCK_TIMEOUT_MS 1000         // 油門鬆開後，等待此時間後強制鎖定 (ms) (故障安全網)
-// [Modified Plan A] UVW三相短路(平順停車)生效後，延遲此時間才鎖定EMB (ms)。
-// 可調整以對齊「機械煞車實際夾緊」與「車速到0」的時機，避免帶速鎖定或鎖定過晚倒溜。
-#define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 300
+
+// [EMB 動作準則]
+//  (1) UVW lock 生效後，經過 EMBRAKER_SHORT_TO_LOCK_DELAY_MS(可設定) → 強制鎖定 EMB。
+//      計時從「UVW lock 生效」起算。延遲長度應足夠讓馬達由 UVW 短路減速到完全停止，
+//      避免帶速鎖定造成騎乘震動。上機依實際停止時間微調。
+//  (2) [Plan B] 偵測到倒溜(反向霍爾邊緣) → 立即鎖定。
+//  (3) [failsafe] 速度命令(ReferenceRAW)歸零後超過 EMBRAKER_LOCK_TIMEOUT_MS 仍未由 UVW lock
+//      鎖定(例如霍爾異常導致 UVW lock 從未生效) → 強制鎖定,確保 EMB 不會永遠不鎖。
+//      計時從「命令歸零」起算(非鬆油門瞬間)，避免 timeout 在減速斜坡期間被吃光而帶速硬鎖。
+//  (4) [有動力倒溜 failsafe] 油門作用中(RELEASED),若「命令方向與實際帶號回授異號」(命令前進卻
+//      後退、或命令後退卻前進)持續 EMBRAKER_ROLLBACK_LOCK_MS → 強制鎖定並閂鎖至鬆油門。
+//      涵蓋陡坡上有動力卻被重力拉著反向、且尚未近停(UVW lock/Plan B 到不了)的情形。
+//      方向由 main.c 用 piInputOmega.inReference/inMeasure(同座標系)判斷後以 bDirMismatch 傳入。
+#define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 50  // UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定
+#define EMBRAKER_LOCK_TIMEOUT_MS 3000         // 命令歸零後逾時強制鎖定的故障安全網 (ms)
+#define EMBRAKER_ROLLBACK_LOCK_MS 2000        // 有動力下方向相反持續此時間 → 強制鎖定 (ms)
+
+// --- 以下參數目前未作為 EMB 動作條件 (保留定義供參考) ---
+#define EMBRAKER_LOCK_SPEED_KMH_X10 5   // (停用) 舊版低於此車速(km/h×10)則鎖定
 
 /**
  * @brief 初始化電磁煞車模組
@@ -52,20 +66,20 @@ bool logic_embraker_init(uint16_t u16IembMv);
  * @note 應在主迴圈中定期呼叫。此函式不直接存取硬體。
  *       內部會根據 i16MotorCommand 的正負號自動判斷方向。
  * @param u16IembMv         IEMB 腳位的即時電壓值 (mV)
- * @param u16SpeedKmhx10    目前車速 (單位: KM/H x 10)
  * @param i16MotorCommand   目前的馬達驅動命令值 (例如: ReferenceRAW, 帶正負號)
  * @param i16ActualMotorCommand 實際發送給馬達的命令值 (用來確認是否為0)
  * @param bUVWLockActive    [Modified Plan A] UVW三相短路(平順停車)是否生效中
  * @param bReverseEdgeDetected [Plan B] 是否偵測到倒溜(與行駛方向相反的霍爾邊緣)
+ * @param bDirMismatch      [有動力倒溜] 命令方向與實際帶號回授異號且確實在滾動(main.c 算好傳入)
  * @param u32CurrentTimeMs  目前的系統時間 (毫秒)
  * @return E_EMBRAKER_ACTION 應對煞車硬體執行的動作
  */
 E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
-                                        uint16_t u16SpeedKmhx10,
                                         int16_t i16MotorCommand,
                                         int16_t i16ActualMotorCommand,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
+                                        bool bDirMismatch,
                                         uint32_t u32CurrentTimeMs);
 
 /**

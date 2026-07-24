@@ -140,8 +140,8 @@
         <targetHeader></targetHeader>
         <targetPluginBoard></targetPluginBoard>
         <platformTool>PK5Tool</platformTool>
-        <languageToolchain>XC16</languageToolchain>
-        <languageToolchainVersion>2.10</languageToolchainVersion>
+        <languageToolchain>XCDSC</languageToolchain>
+        <languageToolchainVersion>3.31.00</languageToolchainVersion>
         <platform>3</platform>
       </toolsSet>
       <packs>
@@ -197,7 +197,6 @@
                   value="..\;..\hal;..\lib;..\lib\motor_control;..\diagnostics"/>
         <property key="isolate-each-function" value="false"/>
         <property key="keep-inline" value="false"/>
-        <property key="oXC16gcc-align-arr" value="false"/>
         <property key="oXC16gcc-cnsts-mauxflash" value="false"/>
         <property key="oXC16gcc-data-sects" value="false"/>
         <property key="oXC16gcc-errata" value=""/>
@@ -252,11 +251,14 @@
         <property key="boot-flash" value="no_flash"/>
         <property key="boot-ram" value="no_ram"/>
         <property key="boot-write-protect" value="no_write_protect"/>
+        <property key="create-vtable" value="true"/>
         <property key="enable-check-sections" value="false"/>
         <property key="enable-data-init" value="true"/>
-        <property key="enable-default-isr" value="true"/>
         <property key="enable-handles" value="true"/>
         <property key="enable-pack-data" value="true"/>
+        <property key="enable-vtable-1" value="false"/>
+        <property key="enable-vtable-2" value="false"/>
+        <property key="enable-vtable-3" value="false"/>
         <property key="extra-lib-directories" value=""/>
         <property key="fill-flash-options-addr" value=""/>
         <property key="fill-flash-options-const" value=""/>
@@ -265,6 +267,7 @@
         <property key="fill-flash-options-increment" value=""/>
         <property key="fill-flash-options-seq" value=""/>
         <property key="fill-flash-options-what" value="0"/>
+        <property key="fill-vtable" value="true"/>
         <property key="general-code-protect" value="no_code_protect"/>
         <property key="general-write-protect" value="no_write_protect"/>
         <property key="generate-cross-reference-file" value="false"/>
@@ -281,6 +284,7 @@
         <property key="oXC16ld-nostdlib" value="false"/>
         <property key="oXC16ld-stackguard" value="16"/>
         <property key="preprocessor-macros" value=""/>
+        <property key="psv-override" value="false"/>
         <property key="remove-unused-sections" value="false"/>
         <property key="report-memory-usage" value="true"/>
         <property key="secure-eeprom" value="no_eeprom"/>
@@ -290,6 +294,15 @@
         <property key="stack-size" value="16"/>
         <property key="symbol-stripping" value=""/>
         <property key="trace-symbols" value=""/>
+        <property key="vtable-address-1" value=""/>
+        <property key="vtable-address-2" value=""/>
+        <property key="vtable-address-3" value=""/>
+        <property key="vtable-number-1" value="1"/>
+        <property key="vtable-number-2" value="0"/>
+        <property key="vtable-number-3" value="0"/>
+        <property key="vtable-type-1" value="--ivt="/>
+        <property key="vtable-type-2" value="--ivt="/>
+        <property key="vtable-type-3" value="--ivt="/>
         <property key="warn-section-align" value="false"/>
       </C30-LD>
       <C30Global>

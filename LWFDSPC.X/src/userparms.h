@@ -178,9 +178,9 @@ minimum value accepted */
 #define SPEEDCNTR_OUTMAX Q15(0.175)  //~Hardware: 13.2A peak, 10mR
 #else
 #define SPEEDCNTR_PTERM 3000
-#define SPEEDCNTR_ITERM 5
+#define SPEEDCNTR_ITERM 10
 #define SPEEDCNTR_CTERM Q15(0.999)
-#define SPEEDCNTR_OUTMAX Q15(0.29)  //~Hardware: 13.2A peak, 10mR  0.175
+#define SPEEDCNTR_OUTMAX Q15(0.5)  //~Hardware: 13.2A peak, 10mR  0.175
 #endif
 
 // 油門控制迴路參數設定
@@ -219,9 +219,15 @@ minimum value accepted */
 #define MOTOR_STALL_CNTR MOTOR_STALL_LOCK_CNTR // Legacy alias: final stall lock threshold
 
 // UVW low-speed lock entry filter (speed profile task is executed every 1ms)
-#define UVW_LOCK_SPEED_THRESHOLD Q15(0.01)
-#define UVW_LOCK_CURRENT_THRESHOLD Q15(0.02)
-#define UVW_LOCK_ENTRY_CNTR 500                // 500 x 1ms = 500ms quiet time before UVW lock
+#define UVW_LOCK_SPEED_THRESHOLD Q15(0.01)      // 進鎖速度門檻 (~1% of MAXIMUM_SPEED_RPM ≈ 30RPM)
+#define UVW_LOCK_CURRENT_THRESHOLD Q15(0.02)    // (保留) 舊版進鎖電流門檻；新版遲滯邏輯已不使用
+#define UVW_LOCK_RELEASE_REF 500                // 油門目標(ReferenceRAW/output scale)高於此值則解鎖；鬆油門=0，踩下時 >= OUTPUT_MIN(1500)
+#define UVW_LOCK_STOP_PULSES 3                  // 進鎖脈衝門檻：HallPulsesLatch < 此值視為已接近靜止 (7≈馬達58RPM, 極對數12)。獨立於 ReGen 的 BrakeStopSpeedPulses,調此值不影響 ReGen 起煞點
+
+// 有動力倒溜/倒衝偵測門檻 (命令方向與帶號回授異號 → EMB failsafe)。用 piInputOmega.inReference/inMeasure。
+#define EMB_ROLLBACK_CMD_THRESHOLD 500          // |inReference| 需 >= 此值(確實在要某方向;OUTPUT_MIN=1500)
+#define EMB_ROLLBACK_SPEED_THRESHOLD Q15(0.02)  // |inMeasure|(Speed,Q15) 需 >= 此值(確實往反向動)
+#define EMB_ROLLBACK_MIN_PULSES 3               // HallPulsesLatch >= 此值(確實在滾動;擋靜止抖動/32767尖峰)
 
 // 電壓向量限制
 #define MAX_VOLTAGE_VECTOR 0.95  // 最大電壓向量限制為 95%，用於 SVPWM 調變

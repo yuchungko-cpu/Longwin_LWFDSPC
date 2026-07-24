@@ -96,7 +96,7 @@ typedef enum {
 
 // --- 對應各溫度區間的電流限制比例 (浮點數) ---
 // 註: 比例基於額定電流 50A (RATED_CURRENT from codeSw.h) 計算得出
-#define LOGIC_TEMP_CONTROLLER_RATIO_NORMAL (0.31f)     //  16A 
+#define LOGIC_TEMP_CONTROLLER_RATIO_NORMAL (0.33f)     //  16A 
 #define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_1 (0.31f)       //  16A
 #define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_2 (0.29f)       //  15A
 #define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_3 (0.271f)     //  14A

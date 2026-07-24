@@ -35,3 +35,22 @@ LWFDSPC.X/queuelogs/
 # OS noise
 Thumbs.db
 Desktop.ini
+
+.generated_files/
+build/
+dist/
+nbproject/
+Makefile*
+Package-*
+private/
+_build/
+out/
+
+# MPLAB X CMake export (generated); keep hand-written user.cmake.
+# Covers both the repo-root cmake/ export and any under LWFDSPC.X/.
+cmake/**/.generated/
+cmake/**/CMake*
+!cmake/**/user.cmake
+LWFDSPC.X/cmake/**/.generated/
+LWFDSPC.X/cmake/**/CMake*
+!LWFDSPC.X/cmake/**/user.cmake

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LWFDSPC 韌體工作紀錄 — 2026-07-21</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.6; }
+  .wrap { max-width:960px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 28px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:20px 24px; margin:0 0 20px; }
+  h2 { font-size:1.25rem; margin:0 0 12px; border-left:4px solid var(--accent);
+       padding-left:10px; }
+  h3 { font-size:1.02rem; margin:18px 0 8px; color:var(--accent); }
+  code { background:var(--code); padding:1px 6px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.9em; color:#ffd580; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow-x:auto; font-family:Consolas,monospace;
+        font-size:.86rem; }
+  pre.del { border-left:4px solid var(--bad); }
+  pre.add { border-left:4px solid var(--ok); }
+  .tag { display:inline-block; font-size:.72rem; font-weight:700; padding:2px 9px;
+         border-radius:20px; margin-left:8px; vertical-align:middle; }
+  .tag.fix { background:rgba(63,185,80,.18); color:var(--ok); }
+  .tag.cfg { background:rgba(78,161,255,.18); color:var(--accent); }
+  .tag.info{ background:rgba(210,153,34,.18); color:var(--warn); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.9rem; }
+  th,td { border:1px solid var(--border); padding:8px 10px; text-align:left; }
+  th { background:rgba(78,161,255,.1); }
+  ul { margin:8px 0; padding-left:22px; }
+  li { margin:4px 0; }
+  .file { color:var(--muted); font-family:Consolas,monospace; font-size:.85rem; }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LWFDSPC 韌體工作紀錄</h1>
+  <p class="sub">專案:Longwin_LWFDSPC_V0.1 &nbsp;|&nbsp; 日期:2026-07-21 &nbsp;|&nbsp; 分支:main</p>
+
+  <!-- 1 -->
+  <div class="card">
+    <h2>1. 修正:停車前後抽動 / UVW lock 進不去<span class="tag fix">FIX · 已驗證</span></h2>
+    <p class="file">main.c:1984-1991</p>
+
+    <h3>症狀</h3>
+    <p>馬達停止後仍前後抽動。UVW 相位鎖定(短路)始終無法 latch。</p>
+
+    <h3>根本原因(死結)</h3>
+    <p>進鎖判斷用了瞬時 <code>Speed</code>(<code>piInputOmega.inMeasure</code>),而 <code>Speed</code> 在停車顫動時被污染:</p>
+    <ul>
+      <li><code>Speed</code> 只在霍爾邊緣更新,每個邊緣把 <code>T1INTCnt=0</code>,使「逾時歸零」路徑永不觸發。</li>
+      <li>顫動週期極短時 <code>HallPeriod &lt;= HallMinPeriod</code> → <code>Speed = 32767</code>(謊報滿速)。</li>
+      <li>→ <code>abs(Speed)</code> 恆大於門檻 → 30ms debounce 一直被清零 → <code>UVWLock</code> 永遠 latch 不上 → FOC 持續對抗 → 繼續抖動。</li>
+    </ul>
+
+    <h3>修正</h3>
+    <p>改用邊緣<strong>計數</strong> <code>HallPulsesLatch</code>(每 100ms 脈衝數),對 32767 尖峰免疫;沿用煞車停止門檻 <code>BrakeStopSpeedPulses (=7)</code>。</p>
+    <pre class="del">- (abs(piInputOmega.inMeasure) &lt; UVW_LOCK_SPEED_THRESHOLD);</pre>
+    <pre class="add">+ (HallPulsesLatch &lt; BrakeStopSpeedPulses);</pre>
+
+    <h3>驗證結果</h3>
+    <p style="color:var(--ok);font-weight:600;">✔ 實機測試:停車抽動已消除。</p>
+  </div>
+
+  <!-- 2 -->
+  <div class="card">
+    <h2>2. 設定:啟用電磁煞車 EMB<span class="tag cfg">CONFIG</span></h2>
+    <p class="file">src/longwin/codeSw.h:32</p>
+    <pre class="add">#define CODESW_EMBRAKER_ENABLE (1)   // 原本為 (0)</pre>
+    <p>子開關維持原值(未變更):</p>
+    <table>
+      <tr><th>開關</th><th>值</th><th>意義</th></tr>
+      <tr><td><code>CODESW_EMBRAKER_USE_ADC_INPUT</code></td><td>0</td><td>使用數位開關輸入(非 RD8 ADC)</td></tr>
+      <tr><td><code>CODESW_EMBRAKER_TEST</code></td><td>0</td><td>實機模式(假設已接手煞車裝置)</td></tr>
+    </table>
+    <p>生效邏輯:EMB 狀態機(<span class="file">main.c:1902-1914</span>)於 <code>FAULT</code> 或 <code>LOCKED &amp;&amp; TargetRpm==0</code> 時切斷動力;Plan A/B 交接訊號(<span class="file">main.c:1270-1298</span>)。</p>
+    <p><strong>互動注意:</strong>UVW lock 的 <code>uGF.UVWLock</code> 經 <code>bEmbUVWLockActive</code> 餵入 EMB 當 Plan A 訊號;倒溜時觸發 Plan B。</p>
+  </div>
+
+  <!-- 3 -->
+  <div class="card">
+    <h2>3. 審視:馬達堵轉保護(現況說明,未修改)<span class="tag info">REVIEW</span></h2>
+    <p class="file">main.c:2756-2827 · MotorStallDetect() · 每 20ms 執行</p>
+
+    <h3>觸發條件(需同時成立)</h3>
+    <ul>
+      <li>速度模式 <code>uGF.CtrlMode == 0</code></li>
+      <li>有驅動命令 <code>|TargetRpm| &gt;= MOTOR_STALL_COMMAND_THRESHOLD (1000)</code></li>
+      <li>近乎不轉 <code>|Speed| &lt;= MOTOR_STALL_SPEED_THRESHOLD (Q15(0.03))</code></li>
+    </ul>
+
+    <h3>三段漸進動作</h3>
+    <table>
+      <tr><th>階段</th><th>門檻(×20ms)</th><th>時間</th><th>動作</th></tr>
+      <tr><td>限流</td><td>MOTOR_STALL_CURRENT_LIMIT_CNTR = 400</td><td>8 秒</td><td>電流降至 50% (MOTOR_STALL_CURRENT_LIMIT_PERCENT)</td></tr>
+      <tr><td>鎖定</td><td>MOTOR_STALL_LOCK_CNTR = 3000</td><td>60 秒</td><td>FaultFlags.MotorStall=1、uGF.Fault=1、切斷輸出 latch</td></tr>
+    </table>
+
+    <h3>解除</h3>
+    <ul>
+      <li>明顯轉動 <code>|Speed| &gt;= Q15(0.06)</code> 持續 500ms (MOTOR_STALL_RELEASE_CNTR=25) → 計數歸零解除限流。</li>
+      <li>latch 後須<strong>放開油門</strong>(TargetRpm==0)才清除 fault。</li>
+    </ul>
+    <p><strong>備註:</strong>偵測用 <code>Speed</code>,但真正堵轉時無霍爾邊緣 → <code>Speed</code> 被 T1 逾時歸零 → 正常偵測,不受顫動尖峰問題影響。</p>
+  </div>
+
+  <p class="foot">Generated 2026-07-21 · LWFDSPC.X firmware worklog</p>
+</div>
+</body>
+</html>

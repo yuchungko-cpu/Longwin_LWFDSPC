@@ -6,11 +6,17 @@
 // --- Module-Private Variables ---
 
 static E_EMBRAKER_STATE s_eCurrentState = EMBRAKER_STATE_LOCKED;
-static uint32_t s_u32LockTimerMs = 0;
 
-// [Modified Plan A] UVW 短路持續時間計時 (用於「短路生效後延遲鎖定 EMB」)
+// 「速度命令歸零(ReferenceRAW==0)」起算的計時，用於逾時 failsafe
+static uint32_t s_u32LockTimerMs = 0;
+static bool s_bFailsafeTiming = false;
+// UVW lock 生效起算的計時，用於「UVW lock 後延遲鎖定 EMB」
 static uint32_t s_u32UvwLockTimerMs = 0;
 static bool s_bUvwLockTiming = false;
+// 有動力下方向相反(倒溜/倒衝)起算的計時；latched 表示已因此上鎖、須待鬆油門才解
+static uint32_t s_u32RollbackTimerMs = 0;
+static bool s_bRollbackTiming = false;
+static bool s_bRollbackLatched = false;
 
 // --- Private Helper Functions ---
 
@@ -33,6 +39,12 @@ static bool _isMotorCommandActive(int16_t i16MotorCommand) {
 // --- Public Function Implementation ---
 
 bool logic_embraker_init(uint16_t u16IembMv) {
+    // 重置所有計時/閂鎖旗標
+    s_bUvwLockTiming = false;
+    s_bFailsafeTiming = false;
+    s_bRollbackTiming = false;
+    s_bRollbackLatched = false;
+
     // 檢查初始故障狀態
     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
         s_eCurrentState = EMBRAKER_STATE_FAULT;
@@ -47,11 +59,11 @@ bool logic_embraker_init(uint16_t u16IembMv) {
 }
 
 E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
-                                        uint16_t u16SpeedKmhx10,
                                         int16_t i16MotorCommand,
                                         int16_t i16ActualMotorCommand,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
+                                        bool bDirMismatch,
                                         uint32_t u32CurrentTimeMs) {
     E_EMBRAKER_ACTION eAction = EMBRAKER_ACTION_NONE;
     E_EMBRAKER_STATE eNextState = s_eCurrentState;
@@ -73,7 +85,13 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
         switch (s_eCurrentState) {
             case EMBRAKER_STATE_LOCKED:
                 // 此狀態為馬達靜止，是進行「運轉前檢查」的地方
-                if (bIsActive) {
+                if (s_bRollbackLatched) {
+                    // [有動力倒溜閂鎖] 保持鎖定,直到駕駛鬆油門才解閂(避免坡上有油門時放開→立即又倒溜)。
+                    eAction = EMBRAKER_ACTION_LOCK;
+                    if (!bIsActive) {
+                        s_bRollbackLatched = false;  // 鬆油門解閂;之後回歸正常運轉前檢查流程
+                    }
+                } else if (bIsActive) {
                     // 收到運轉指令，現在檢查IEMB
                     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
                         // 運轉前檢查失敗，進入故障狀態
@@ -93,8 +111,25 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                 if (!bIsActive) {
                     // 運轉指令已停止，準備鎖定煞車
                     eNextState = EMBRAKER_STATE_WAITING_TO_LOCK;
-                    s_u32LockTimerMs = u32CurrentTimeMs;  // 啟動計時器 (故障安全網用)
-                    s_bUvwLockTiming = false;             // 重置 Plan A 計時
+                    s_bUvwLockTiming = false;   // 重置 UVW lock 延遲計時
+                    s_bFailsafeTiming = false;  // 重置 failsafe 計時 (改為命令歸零後才起算)
+                    s_bRollbackTiming = false;  // 重置有動力倒溜計時
+                } else if (bDirMismatch) {
+                    // [有動力倒溜 failsafe] 命令方向與實際帶號回授異號且確實在滾動 → 計時,
+                    //   持續 EMBRAKER_ROLLBACK_LOCK_MS 即強制鎖定並閂鎖(待鬆油門才解)。
+                    //   馬達斷力交由既有 stall 保護處理(輪被鎖住→近零速+有命令→MotorStall 斷力並閂鎖)。
+                    if (!s_bRollbackTiming) {
+                        s_bRollbackTiming = true;
+                        s_u32RollbackTimerMs = u32CurrentTimeMs;
+                    } else if ((u32CurrentTimeMs - s_u32RollbackTimerMs) >= EMBRAKER_ROLLBACK_LOCK_MS) {
+                        eAction = EMBRAKER_ACTION_LOCK;
+                        eNextState = EMBRAKER_STATE_LOCKED;
+                        s_bRollbackTiming = false;
+                        s_bRollbackLatched = true;
+                    }
+                } else {
+                    // 方向一致(正常運轉) → 重置倒溜計時
+                    s_bRollbackTiming = false;
                 }
                 break;
 
@@ -103,7 +138,8 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     // 在鎖定前又重新給予指令，直接回到釋放狀態 (無需再次檢查IEMB)
                     eAction = EMBRAKER_ACTION_RELEASE;
                     eNextState = EMBRAKER_STATE_RELEASED;
-                    s_bUvwLockTiming = false;  // 重置 Plan A 計時
+                    s_bUvwLockTiming = false;   // 重置 UVW lock 延遲計時
+                    s_bFailsafeTiming = false;  // 重置 failsafe 計時
                 } else if (bReverseEdgeDetected) {
                     // [Plan B] 偵測到倒溜(反向霍爾邊緣) → 立即鎖定，繞過延遲。
                     // 適用於 UVW 短路在靜止時撐不住重力、車已開始倒溜的瞬間搶救。
@@ -111,26 +147,40 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eNextState = EMBRAKER_STATE_LOCKED;
                     s_bUvwLockTiming = false;
                 } else if (bUVWLockActive) {
-                    // [Modified Plan A] UVW 三相短路(平順停車)生效後，計時達可調延遲才鎖定，
-                    // 讓機械煞車的夾緊時機對齊車速到0，避免帶速鎖定或鎖定過晚倒溜。
+                    // [動作準則] UVW 三相短路(平順停車)生效後，計時達可設定延遲才鎖定 EMB。
+                    //   計時從「UVW lock 生效」起算，延遲足夠讓馬達由短路減速到停止，
+                    //   避免帶速鎖定造成騎乘震動。
+                    s_bFailsafeTiming = false;  // UVW 主路徑接手，failsafe 不計時
                     if (!s_bUvwLockTiming) {
                         s_bUvwLockTiming = true;
-                        s_u32UvwLockTimerMs = u32CurrentTimeMs;  // UVW 短路起算
+                        s_u32UvwLockTimerMs = u32CurrentTimeMs;  // UVW lock 生效起算
                     } else if ((u32CurrentTimeMs - s_u32UvwLockTimerMs) >= EMBRAKER_SHORT_TO_LOCK_DELAY_MS) {
                         eAction = EMBRAKER_ACTION_LOCK;
                         eNextState = EMBRAKER_STATE_LOCKED;
                         s_bUvwLockTiming = false;
                     }
                 } else {
-                    // UVW 短路尚未生效 → 重置 Plan A 計時；保留原速度/逾時作為故障安全網。
+                    // UVW lock 尚未生效 → 重置 UVW 延遲計時；由「命令歸零起算」的逾時 failsafe 保底。
                     s_bUvwLockTiming = false;
 
-                    bool bShouldLockBySpeed = (u16SpeedKmhx10 < EMBRAKER_LOCK_SPEED_KMH_X10);
-                    bool bShouldLockByTimeout = ((u32CurrentTimeMs - s_u32LockTimerMs) > EMBRAKER_LOCK_TIMEOUT_MS);
-
-                    if (bIsActualMotorCommandZero && (bShouldLockBySpeed || bShouldLockByTimeout)) {
-                        eAction = EMBRAKER_ACTION_LOCK;
-                        eNextState = EMBRAKER_STATE_LOCKED; // 回到鎖定狀態，準備下一次的運轉前檢查
+                    // [failsafe] 計時從「速度命令(ReferenceRAW)真正歸零」起算，而非鬆油門瞬間。
+                    //   若從鬆油門起算，減速斜坡較長時 timeout 會在斜坡期間被吃光，命令一到 0
+                    //   就立即帶速硬鎖 → 震動。改為命令歸零後才起算，才有真正的 settle 緩衝窗，
+                    //   期間車可繼續減速、UVW lock 也有機會先生效走主路徑。
+                    //   命令歸零後持續 EMBRAKER_LOCK_TIMEOUT_MS 仍未由 UVW lock 鎖定(例如霍爾
+                    //   異常使 UVW lock 從未生效) → 強制鎖定，確保 EMB 不會永遠不鎖。
+                    if (bIsActualMotorCommandZero) {
+                        if (!s_bFailsafeTiming) {
+                            s_bFailsafeTiming = true;
+                            s_u32LockTimerMs = u32CurrentTimeMs;  // 命令歸零起算
+                        } else if ((u32CurrentTimeMs - s_u32LockTimerMs) > EMBRAKER_LOCK_TIMEOUT_MS) {
+                            eAction = EMBRAKER_ACTION_LOCK;
+                            eNextState = EMBRAKER_STATE_LOCKED;
+                            s_bFailsafeTiming = false;
+                        }
+                    } else {
+                        // 命令尚未歸零(仍在減速斜坡上) → 不計時
+                        s_bFailsafeTiming = false;
                     }
                 }
                 break;
