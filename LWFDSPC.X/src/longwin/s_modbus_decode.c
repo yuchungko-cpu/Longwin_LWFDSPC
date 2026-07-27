@@ -420,8 +420,9 @@ void modbusDecode_encodeGuiSettings(U_MODBUS_PC_GUI_DATA *pDest,
     }
 
     //
-    // Block 4: FW Version (Addr 0x0015)
-    uint16_t u16Version = ((uint16_t)pSrc->u8FwCategory << 8) | ((uint16_t)pSrc->u8FwMajor << 4) | pSrc->u8FwMinor;
+    // Block 4: FW Version (Addr 0x0015) — 直接用韌體版本巨集,不依賴未賦值的來源欄位。
+    // 格式: (Category<<8)|(Major<<4)|Minor;目前 V0.13 = 0x0013 (見 s_modbus_decode.h)。
+    uint16_t u16Version = ((uint16_t)FW_VER_CATEGORY << 8) | ((uint16_t)FW_VER_MAJOR << 4) | FW_VER_MINOR;
     pDest->u16Regs[0x15] = u16Version;
 
     // Block 5: Mirrored Battery Info (Addr 0x0016 - 0x001B)
