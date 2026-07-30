@@ -10,10 +10,15 @@ static uint32_t (*s_pfnGetTime_ms)(void) = NULL;
 static uint32_t su32DefaultTimeoutMs = 100;
 static bool sbServiceEnabled = true;
 
+#define MODBUS_GUARD_WORD_COUNT 8u
+#define MODBUS_GUARD_BASE_VALUE 0x4D10u
+
 //=================================================================================================
 // 靜態輔助函式宣告 (Static Helper Function Declarations)
 //=================================================================================================
 static uint16_t _modMst_calculateCrc16(const uint8_t *pu8Msg, uint16_t u16DataLen);
+static void _modMst_guardFill(void);
+static void _modMst_guardCheck(void);
 
 /* ==========================================================================
  *  服務層 (Service Layer) 實作
@@ -46,6 +51,12 @@ static bool sbNewDataFromGui = false;
 // --- 資料儲存 ---
 // 方案二：受控全域化 - 靜態全域變數，只透過函式介面存取
 static S_MODBUS_ALL_DATA g_stModbusAllData;
+volatile uint16_t g_au16ModbusGuard[MODBUS_GUARD_WORD_COUNT];
+volatile uint16_t g_u16ModbusGuardErrorCount = 0;
+volatile uint16_t g_u16ModbusCurrentMapIndex = 0;
+volatile uint16_t g_u16ModbusState = 0;
+volatile uint16_t g_u16ModbusLastRxLen = 0;
+volatile uint16_t g_u16ModbusParseFailCount = 0;
 
 #ifdef ENABLE_MODBUS_TEST_SLAVE
 static bool sbTestSlaveEnabled = true;
@@ -55,7 +66,7 @@ static bool sbTestSlaveEnabled = true;
 static const S_MODBUS_REG_MAP_ITEM scstRegisterMap[] = {
     // --- 主要裝置任務 (ID 1-3) ---
     // ID01: Battery
-    {SLAVE_ID_BATTERY, 0x0001, 9, E_MODBUS_DIR_READ, &g_stModbusAllData.uBatteryData.u16Regs},
+    {SLAVE_ID_BATTERY, 0x0001, 9, E_MODBUS_DIR_READ, &g_stModbusAllData.uBatteryData.u16Regs[0x01]},
     // ID02: LCD - 根據實際通訊序列調整
     {SLAVE_ID_LCD, 0x0001, 17, E_MODBUS_DIR_WRITE, &g_stModbusAllData.uLcdData.u16Regs[0x01]},  // 寫入 17 個暫存器 (0x0001-0x0011)
     {SLAVE_ID_LCD, 0x0007, 11, E_MODBUS_DIR_READ, &g_stModbusAllData.uLcdData.u16Regs[0x07]},   // 讀取 11 個暫存器 (0x0007-0x0011)
@@ -100,6 +111,27 @@ static const S_MODBUS_REG_MAP_ITEM scstRegisterMap[] = {
 
 static const int siRegisterMapSize = sizeof(scstRegisterMap) / sizeof(scstRegisterMap[0]);
 
+static void _modMst_guardFill(void)
+{
+    for (uint16_t i = 0; i < MODBUS_GUARD_WORD_COUNT; ++i)
+    {
+        g_au16ModbusGuard[i] = (uint16_t)(MODBUS_GUARD_BASE_VALUE + i);
+    }
+}
+
+static void _modMst_guardCheck(void)
+{
+    for (uint16_t i = 0; i < MODBUS_GUARD_WORD_COUNT; ++i)
+    {
+        if (g_au16ModbusGuard[i] != (uint16_t)(MODBUS_GUARD_BASE_VALUE + i))
+        {
+            g_u16ModbusGuardErrorCount++;
+            _modMst_guardFill();
+            break;
+        }
+    }
+}
+
 static bool _modMst_isSlaveEnabled(uint8_t u8SlaveId)
 {
 #ifdef ENABLE_MODBUS_TEST_SLAVE
@@ -123,6 +155,12 @@ void modbusService_init(uint32_t (*pfnGetTime)(void), uint32_t u32Timeout)
 
     seSvcState = E_SVC_STATE_READY_TO_SEND;
     memset(&g_stModbusAllData, 0, sizeof(g_stModbusAllData));
+    g_u16ModbusGuardErrorCount = 0;
+    g_u16ModbusCurrentMapIndex = 0;
+    g_u16ModbusState = 0;
+    g_u16ModbusLastRxLen = 0;
+    g_u16ModbusParseFailCount = 0;
+    _modMst_guardFill();
 
     // 初始化首次同步旗標
     sbLcdInitialContactMade = false;
@@ -158,6 +196,10 @@ void modbusService_process(void)
     if (!sbServiceEnabled || s_pfnGetTime_ms == NULL)
         return;
 
+    _modMst_guardCheck();
+    g_u16ModbusState = (uint16_t)seSvcState;
+    g_u16ModbusCurrentMapIndex = (uint16_t)siCurrentMapIndex;
+
     hal_rs485_process();
 
     switch (seSvcState)
@@ -177,6 +219,7 @@ void modbusService_process(void)
                                                                     au8TxBuf);
                     if (u8Len > 0) {
                         hal_rs485_send(au8TxBuf, u8Len);
+                        siCurrentMapIndex = i;
                         seSvcState = E_SVC_STATE_WAITING_FOR_RESPONSE;
                         su32SvcTimestamp = s_pfnGetTime_ms();
                         sbLcdInitialWriteSent = true; // 標記為已發送
@@ -292,11 +335,13 @@ void modbusService_process(void)
             // --- 結束 ---
 
             uint8_t au8RxBuf[256];
-            uint8_t u8Len = hal_rs485_get_rx_length();
-            if (u8Len > sizeof(au8RxBuf))
+            uint16_t u16RxLen = hal_rs485_get_rx_length();
+            if (u16RxLen > sizeof(au8RxBuf))
             {
-                u8Len = (uint8_t)sizeof(au8RxBuf);
+                u16RxLen = (uint16_t)sizeof(au8RxBuf);
             }
+            uint8_t u8Len = (uint8_t)u16RxLen;
+            g_u16ModbusLastRxLen = u16RxLen;
             memcpy(au8RxBuf, hal_rs485_get_rx_data(), u8Len);
             hal_rs485_receive_reset();
 
@@ -379,10 +424,17 @@ void modbusService_process(void)
                         }
                     }
                 }
+                else
+                {
+                    g_u16ModbusParseFailCount++;
+                }
             }
             else
             {
-                modbusEngine_parseResponse(pstStartTask->u8SlaveId, 0x10, au8RxBuf, u8Len, NULL, 0);
+                if (!modbusEngine_parseResponse(pstStartTask->u8SlaveId, 0x10, au8RxBuf, u8Len, NULL, 0))
+                {
+                    g_u16ModbusParseFailCount++;
+                }
             }
 
             // --- 處理完畢，進入下一個狀態 ---

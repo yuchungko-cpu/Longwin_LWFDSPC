@@ -1,7 +1,7 @@
 #include "s_logic_motor.h"
 #include "s_logic_error_handler.h"  // For error code handling
 #include <stddef.h>                 // For NULL
-#include "../userparms.h"           // For NOPOLESPAIRS, etc.
+#include "../userparms.h"           // For Q15(), PI 增益等；刻度參數見 ../motor_scale.h
 
 // --- Scaling Factors for Integer Math ---
 #define RPM_SCALE_FACTOR 10  // RPM 放大倍數 (0.1 RPM 精度)

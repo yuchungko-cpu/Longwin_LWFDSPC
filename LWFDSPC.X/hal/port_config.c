@@ -58,6 +58,7 @@
 #include <p33CK256MP506.h>
 #include "port_config.h"
 #include "../src/userparms.h"
+#include "../src/longwin/codeSw.h"
 // *****************************************************************************
 // *****************************************************************************
 // Section: Functions
@@ -364,11 +365,12 @@ void MapGPIOHWFunction(void) {
     _RP56R = 0b000001;     // RC8 -> UART1 TX
     CNPUCbits.CNPUC9 = 1;  // RC9上拉電阻
 
-    // CAN通訊腳位配置
-    // Pin 48: RB8 (CAN_TX) - CAN傳送
-    // Pin 49: RB9 (CAN_RX) - CAN接收
-    _TRISB8 = 1;                   // RB8設為輸入
-    _TRISB9 = 1;                   // RB9設為輸入
-    RPOR4bits.RP40R = 0x0015;      // RB8 -> CAN FD1 MODULE:CAN1TX
-    RPINR26bits.CAN1RXR = 0x0029;  // RB9 -> CAN FD1 MODULE:CAN1RX
+    // X2CScope 專屬 UART2 腳位配置 (原為 CAN1，CAN 已停用改由 UART2 使用)
+    // Pin 48: RB8 (U2TX) - X2CScope 傳送
+    // Pin 49: RB9 (U2RX) - X2CScope 接收
+    _TRISB8 = 0;                // RB8 設為輸出 (U2TX)
+    _TRISB9 = 1;                // RB9 設為輸入 (U2RX)
+    RPOR4bits.RP40R = 0x0003;   // RB8(RP40) -> U2TX (_RPOUT_U2TX = 3)
+    _U2RXR = 41;                // RB9(RP41) -> U2RX
+    CNPUBbits.CNPUB9 = 1;       // RB9 上拉電阻 (與 RC9/U1RX 相同慣例)
 }

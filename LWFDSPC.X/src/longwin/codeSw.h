@@ -45,9 +45,35 @@ void delayMicroseconds(uint32_t us);
 // #define CODESW_UART_BRG_VALUE (53) // For 115200 baud with FCY=100MHz (based
 // on hal/clock.h). BRG = (100000000 / (16 * 115200)) - 1 = 53.25
 
-// X2C Scope 改為可以透過 RS485 連線
-#define CODESW_SCOPE_ENABLE (0)
-#define CODESW_MODBUS_SCHEDULER_ENABLE (!CODESW_SCOPE_ENABLE)  // 1: 啟用 Modbus 排程器, 0: 停用
+// =============================================================================
+// == X2CScope 與 Modbus/RS485 ==
+// == X2CScope 走專屬 UART2 (RB8=U2TX / RB9=U2RX)，Modbus/RS485 走 UART1，      ==
+// == 兩者硬體上完全獨立，可同時運作。                                          ==
+// =============================================================================
+
+// Modbus/RS485 排程器開關。
+// 【2026-07-29】原本定義為 (!CODESW_SCOPE_ENABLE)，因為舊設計裡 X2CScope 與 RS485 共用
+// UART1、硬體上不可能並存。X2CScope 改用專屬 UART2 之後兩者已完全獨立，那個互補關係
+// 沒有意義且造成誤導 (「關掉 Modbus」會連帶改動 X2C 觀測變數的宣告)，故 CODESW_SCOPE_ENABLE
+// 已移除，X2CScope 一律改用 CODESW_X2C_SCOPE_ENABLE。
+#define CODESW_MODBUS_SCHEDULER_ENABLE (1)  // 1: 啟用 Modbus 排程器, 0: 停用
+
+// Modbus/RS485 執行暫停開關 (單一變因，除錯用)。
+// 設 1 時只跳過主迴圈裡的 modbusService_process() —— 那是唯一會真正驅動 RS485 收發與
+// 狀態機的入口，所以等於「RS485 完全靜止」，但其餘 Modbus 程式碼照常編譯，不會踩到
+// CODESW_MODBUS_SCHEDULER_ENABLE 設 0 時的編譯錯誤。
+// 副作用：電池/LCD/GUI 資料不再更新 (decode 讀到舊值)，僅適合平台測試，測完設回 0。
+#define CODESW_MODBUS_PROCESS_SUSPEND (0)
+
+// X2CScope 開關 (走專屬 UART2：RB8=U2TX / RB9=U2RX，原 CAN1 腳位，CAN IC 已實體移除)。
+// 接線：MCU pin48(RB8) → 轉接器 RXD；MCU pin49(RB9) ← 轉接器 TXD；必須共地、3.3V 準位。
+// baud 115741 (divider 53)，GUI 端設 115200。
+// 接收為中斷驅動 (_U2RXInterrupt, IPL 3 —— 低於 ADC/PWM 的 7 與 Modbus U1RX 的 4)
+// 搭配 128 byte 軟體 FIFO，故接收不依賴主迴圈頻率。
+// 硬體鏈路已於 2026-07-28 完整驗證 (RB8 腳位 10kHz、TX 57.9kHz、pin48/49 短接自我回路、
+// 經真實轉接器的收發回音)，四個暫時性自測開關已於 2026-07-29 全部移除。
+#define CODESW_X2C_SCOPE_ENABLE (1)
+
 #define CODESW_MODBUS_SCHEDULER_BRG_VALUE (107)                // For 57600 baud with FCY=100MHz (based on hal/clock.h). BRG =
                                                                // (100000000 / (16 * 57600)) - 1 = 108.5
 

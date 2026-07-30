@@ -16,7 +16,7 @@
 // --- 電池暫存器結構定義 ---
 typedef struct
 {
-    uint16_t u16Regs[9];
+    uint16_t u16Regs[0x0A]; // Address-indexed: valid Modbus addresses 0x0001-0x0009.
 } S_MODBUS_BATTERY_DATA_RAW;
 
 typedef union
@@ -37,7 +37,7 @@ typedef struct
 typedef union
 {
     S_MODBUS_LCD_APP_DATA_RAW stRaw;
-    uint16_t u16Regs[sizeof(S_MODBUS_LCD_APP_DATA_RAW) / sizeof(uint16_t)];
+    uint16_t u16Regs[0x12]; // Address-indexed: valid Modbus addresses 0x0001-0x0011.
 } U_MODBUS_LCD_APP_DATA;
 
 // --- PC GUI 暫存器結構定義 ---
@@ -59,7 +59,7 @@ typedef struct
 typedef union
 {
     S_MODBUS_PC_GUI_DATA_RAW stRaw;
-    uint16_t u16Regs[sizeof(S_MODBUS_PC_GUI_DATA_RAW) / sizeof(uint16_t)];
+    uint16_t u16Regs[0x1E]; // Address-indexed: valid Modbus addresses 0x0001-0x001D.
 } U_MODBUS_PC_GUI_DATA;
 
 // --- 包含所有裝置資料的聯合體 ---

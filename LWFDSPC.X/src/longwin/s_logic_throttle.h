@@ -5,6 +5,19 @@
 #include <stdbool.h>  // For bool type
 #include "codeSw.h"
 #include "s_logic_motor.h"  // For motor control
+#include "../motor_scale.h"  // RPMX10_TO_CMD / SPEED_FS_RPM
+
+// *****************************************************************************
+//  【重要】本模組所有 OUTPUT_xxx 與 DECEL_Oxx 的單位是「Q15 速度命令 count」，
+//  不是 RPM (雖然變數名為 u16TargetRpm)。它們最終流向：
+//     i16ActiveRpm -> ReferenceRAW -> ctrlParm.qVelRef -> piInputOmega.inReference
+//  而速度環的另一端 inMeasure = Speed 是 Q15 (滿刻度 32768 = SPEED_FS_RPM 機械 RPM)。
+//
+//  為了讓這些常數與 Q15 刻度解耦，改用 RPMX10_TO_CMD(機械RPM * 10) 表示。
+//  換算 (SPEED_FS_RPM=12000, 齒比 20.3, 8 吋輪)：
+//     1 count = 0.366 機械 RPM = 0.018 輪 RPM = 0.00069 km/h
+//  註解中的 km/h 為理論值；實機頂速約 7.2 km/h (≈10400 counts)。
+// *****************************************************************************
 
 // --- 硬體相關參數定義 ---
 
@@ -22,17 +35,17 @@ typedef enum {
 #define LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV (800u)  // 正轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
 #define LOGIC_THROTTLE_FWD_VOLTAGE_MAX_MV (4800u)  // 正轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
-#define LOGIC_THROTTLE_FWD_OUTPUT_ZERO (0u)     // 正轉電壓低於 MIN 時的目標輸出
-#define LOGIC_THROTTLE_FWD_OUTPUT_MIN (1500u)   // 正轉對應 VOLTAGE_MIN_MV 的輸出
-#define LOGIC_THROTTLE_FWD_OUTPUT_MAX (12000u)  // 正轉對應 VOLTAGE_MAX_MV 的輸出
+#define LOGIC_THROTTLE_FWD_OUTPUT_ZERO (0u)                  // 正轉電壓低於 MIN 時的目標輸出
+#define LOGIC_THROTTLE_FWD_OUTPUT_MIN RPMX10_TO_CMD(5493)    // 549.3 RPM =  1.04 km/h (= 舊值 1500)
+#define LOGIC_THROTTLE_FWD_OUTPUT_MAX RPMX10_TO_CMD(43945)   // 4394.5 RPM = 8.29 km/h (= 舊值 12000)
 
 // --- 反轉油門電壓與輸出對應關係 ---
 #define LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV (800u)  // 反轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
 #define LOGIC_THROTTLE_REV_VOLTAGE_MAX_MV (4800u)  // 反轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
-#define LOGIC_THROTTLE_REV_OUTPUT_ZERO (0u)     // 反轉電壓低於 MIN 時的目標輸出
-#define LOGIC_THROTTLE_REV_OUTPUT_MIN (1500u)   // 反轉對應 VOLTAGE_MIN_MV 的輸出
-#define LOGIC_THROTTLE_REV_OUTPUT_MAX (4000u)  // 反轉對應 VOLTAGE_MAX_MV 的輸出
+#define LOGIC_THROTTLE_REV_OUTPUT_ZERO (0u)                 // 反轉電壓低於 MIN 時的目標輸出
+#define LOGIC_THROTTLE_REV_OUTPUT_MIN RPMX10_TO_CMD(5493)   // 549.3 RPM = 1.04 km/h (= 舊值 1500)
+#define LOGIC_THROTTLE_REV_OUTPUT_MAX RPMX10_TO_CMD(14648)  // 1464.8 RPM = 2.76 km/h (= 舊值 4000)
 
 // 開機安全檢查
 #define LOGIC_THROTTLE_POWER_ON_CHECK_MV (1000u)  // 開機檢測電壓閾值，油門電壓需低於此值才視為安全/已釋放
@@ -50,10 +63,10 @@ typedef enum {
 #define LOGIC_THROTTLE_FWD_ACCEL_V4_MV (3900u)
 
 // 減速段 (輸出值下降)
-#define LOGIC_THROTTLE_FWD_DECEL_O1 (3600u)
-#define LOGIC_THROTTLE_FWD_DECEL_O2 (5700u)
-#define LOGIC_THROTTLE_FWD_DECEL_O3 (7800u)
-#define LOGIC_THROTTLE_FWD_DECEL_O4 (9900u)
+#define LOGIC_THROTTLE_FWD_DECEL_O1 RPMX10_TO_CMD(13184)  // 1318.4 RPM = 2.49 km/h (= 舊值 3600)
+#define LOGIC_THROTTLE_FWD_DECEL_O2 RPMX10_TO_CMD(20874)  // 2087.4 RPM = 3.94 km/h (= 舊值 5700)
+#define LOGIC_THROTTLE_FWD_DECEL_O3 RPMX10_TO_CMD(28564)  // 2856.4 RPM = 5.39 km/h (= 舊值 7800)
+#define LOGIC_THROTTLE_FWD_DECEL_O4 RPMX10_TO_CMD(36255)  // 3625.5 RPM = 6.84 km/h (= 舊值 9900)
 
 // --- 反轉加速/減速 Step/Time 表格 ---
 // 加速段 (電壓上升)
@@ -63,10 +76,10 @@ typedef enum {
 #define LOGIC_THROTTLE_REV_ACCEL_V4_MV (3900u)
 
 // 減速段 (輸出值下降)
-#define LOGIC_THROTTLE_REV_DECEL_O1 (2000u)
-#define LOGIC_THROTTLE_REV_DECEL_O2 (2500u)
-#define LOGIC_THROTTLE_REV_DECEL_O3 (3000u)
-#define LOGIC_THROTTLE_REV_DECEL_O4 (3500u)
+#define LOGIC_THROTTLE_REV_DECEL_O1 RPMX10_TO_CMD(7324)   //  732.4 RPM = 1.38 km/h (= 舊值 2000)
+#define LOGIC_THROTTLE_REV_DECEL_O2 RPMX10_TO_CMD(9155)   //  915.5 RPM = 1.73 km/h (= 舊值 2500)
+#define LOGIC_THROTTLE_REV_DECEL_O3 RPMX10_TO_CMD(10986)  // 1098.6 RPM = 2.07 km/h (= 舊值 3000)
+#define LOGIC_THROTTLE_REV_DECEL_O4 RPMX10_TO_CMD(12817)  // 1281.7 RPM = 2.42 km/h (= 舊值 3500)
 
 // --- Throttle Forward Acceleration Step Time Table Definitions ---
 // Format: {Step, TimeMs}
@@ -102,7 +115,18 @@ typedef enum {
                                                       //
 // 初始化定義最高轉速
 #define THROTTLE_ASSIST_LEVEL_DEFAULT (5)
-#define THROTTLE_ASSIST_LEVEL_MAX_OUTPUT_VALUES {0, 4000, 6000, 8000, 10000, 12000} //  9500=4km  10500=4.5km  11800=5km  12800=5.5km  14000=6km 
+// 段位對應的正轉命令上限。索引 0~5，共 THROTTLE_ASSIST_LEVEL_COUNT 筆。
+// 括號內為理論車速 (8 吋輪, 齒比 20.3)；實機頂速約 7.2 km/h，故段位 5 的上限
+// 用不完，多出的約 13% 餘裕是留給負載/爬坡的扭力頭。
+#define THROTTLE_ASSIST_LEVEL_MAX_OUTPUT_VALUES { \
+    0,                       /*         0 RPM = 0.00 km/h (= 舊值 0)     */ \
+    RPMX10_TO_CMD(14648),    /*  1464.8 RPM = 2.76 km/h (= 舊值  4000)  */ \
+    RPMX10_TO_CMD(21973),    /*  2197.3 RPM = 4.15 km/h (= 舊值  6000)  */ \
+    RPMX10_TO_CMD(29297),    /*  2929.7 RPM = 5.53 km/h (= 舊值  8000)  */ \
+    RPMX10_TO_CMD(36621),    /*  3662.1 RPM = 6.91 km/h (= 舊值 10000)  */ \
+    RPMX10_TO_CMD(43945)     /*  4394.5 RPM = 8.29 km/h (= 舊值 12000)  */ \
+}
+#define THROTTLE_ASSIST_LEVEL_COUNT (6)  // 上表筆數，供 s_logic_throttle.c 做索引邊界檢查
 
 // --- 函數宣告 ---
 

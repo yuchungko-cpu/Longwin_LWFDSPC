@@ -29,9 +29,16 @@
 
 #include "hal/board_service.h"
 
-#if CODESW_SCOPE_ENABLE == 1
+#if CODESW_X2C_SCOPE_ENABLE == 1
 #include "diagnostics/diagnostics.h"
 #endif
+
+/*
+ * 【診斷】主迴圈實際頻率 (Hz)，每秒更新一次；可直接在 X2CScope Watch View 觀察。
+ * 參考值：Modbus 停用時實測 42835Hz (23.3us/圈)。
+ * 無條件編譯 —— 見下方「觀測變數一律存在」的說明。
+ */
+volatile uint32_t g_u32MainLoopHz = 0;
 
 #include "src/HallScan_EE.h"
 
@@ -60,16 +67,12 @@
 #if CODESW_EMBRAKER_ENABLE
 #include "src/longwin/s_logic_embraker.h"
 #endif
-#if CODESW_MODBUS_SCHEDULER_ENABLE == 1
+// Modbus 相關 header 一律 include：對應的 .c 本來就無條件編譯，這裡只是型別與函式宣告，
+// 不含任何程式碼成本。這樣 S_SHARED_DEVICE_DATA / S_BATTERY_DATA 等型別在
+// CODESW_MODBUS_SCHEDULER_ENABLE = 0 時依然可見。
 #include "src/longwin/s_hal_rs485.h"
 #include "src/longwin/s_modbus_decode.h"
 #include "src/longwin/s_modbus_master.h"
-
-// S_MODBUS_APP_DATA_RAW g_stAppData;
-// S_MODBUS_PC_GUI_DATA_RAW g_stPcGuiData;
-// S_MODBUS_BATTERY_DATA_RAW g_stBatteryData;
-// S_MODBUS_ALL_DATA g_stAllData;  // 改用 modbusService_getDataPtr() 存取
-#endif
 #include "src/longwin/s_logic_error_handler.h"
 
 #if CODESW_EMBRAKER_TEST
@@ -129,10 +132,10 @@ typedef struct {
     uint16_t u16MotorRpm;           // 速度保護轉速 (RPM)
     uint16_t u16ThrottleLevelMax;   // 依據 Assist Level 得到最高的限速
     S_MOTOR_STEP_TIME_T sStepTime;  // 油門/VR步進時間
-#if CODESW_MODBUS_SCHEDULER_ENABLE == 1
+    // 一律存在：這兩份資料是全系統共用的狀態 (車速、助力等級、電池)，
+    // 主迴圈與 X2CScope 觀測都會讀，不應隨 Modbus 開關出現/消失。
     S_BATTERY_DATA sBatteryData;
     S_SHARED_DEVICE_DATA sSharedData;
-#endif
 
     // 狀態標誌 (可根據需要擴展)
     bool bBatteryVoltageValid;  // 電池電壓有效標誌
@@ -162,9 +165,17 @@ S_SYSTEM_DATA_T g_stSystemData = {0};
 
 #define millis() g_stSystemData.u32TimeMs
 
-#if CODESW_SCOPE_ENABLE == 1
+// =============================================================================
+// == X2CScope 觀測變數：一律無條件編譯，不隨 CODESW_X2C_SCOPE_ENABLE 出現/消失。 ==
+// ==                                                                          ==
+// == 理由：開關只應決定「X2CScope 要不要執行」，不該改變 main.c 編譯出哪些程式碼。 ==
+// == 過去把這些變數掛在開關下，導致開關一翻符號就從 elf 消失，GUI 存下的 Scope   ==
+// == 通道解析不到位址 → Scope View 報 null 而 Watch View 卻正常，極難診斷。      ==
+// == 代價僅約 20 bytes RAM 與 ADC ISR 內 3 個賦值 (遠低於 0.1% CPU)。            ==
+// =============================================================================
+
+// 車速 (KM/H * 10)。值由主迴圈自 g_stSystemData.sSharedData 鏡射而來。
 uint16_t u16CurrentSpeedKmh_x10;
-#endif
 // 用於 RS485 的時間函式
 uint32_t getSystemTimeMs(void) {
     return g_stSystemData.u32TimeMs;
@@ -278,12 +289,14 @@ unsigned char SpeedLoopCntr = 0;
 unsigned int SpeedSlopCntr = 0;
 signed int ReGenTorq = Q15(0.1);   // Initial ReGen brake duty cycle
 signed int ReGenSpeed = Q15(0.0);  // Low limit of speed for UVW lock
-#if CODESW_SCOPE_ENABLE == 1
+// PWM 佔空比觀測變數 (見上方「觀測變數一律存在」的說明)，於 ADC ISR 內更新。
 unsigned int X2CPG1Duty = 0;
 unsigned int X2CPG2Duty = 0;
 unsigned int X2CPG3Duty = 0;
-#endif
-signed int UVWLockSpeed = Q15(0.06);  // main.c    3000*(0.05)=150RPM   以下轉速啟動Lock
+// 1966 count = 720 馬達RPM = 1.36 km/h 以下啟動 Lock。
+// 註：僅被 main.c 的 #if 0 死碼區 (CtrlMode 0/2 舊路徑) 使用；live 路徑用
+//     UVW_LOCK_STOP_PULSES / UVW_LOCK_RELEASE_REF。
+signed int UVWLockSpeed = Q15(0.06);
 signed int SpeedCtrlLimit;
 signed int SpeedModeCtrlLimit;
 unsigned int AccSet = ACC_SET;
@@ -294,8 +307,10 @@ signed int BrakeStopSpeed =
 signed int BrakeStartSpeed =
     1000;  // 1000 = Q15(0.0305) ;   // No braking below the speed
 signed int MotorStartSpeed = Q15(0.01);
-signed int BrakeStartSpeedPulses = 15;  // use pulses instead of speed
-signed int BrakeStopSpeedPulses = 7;
+// ReGen 起/停煞門檻，用 HallPulsesLatch (每 100ms Hall 邊緣數) 而非 Speed。
+// 換算 (18 邊緣/機械轉, 齒比 20.3)：1 pulse/100ms = 33.3 馬達RPM = 0.063 km/h
+signed int BrakeStartSpeedPulses = 15;  // 500 馬達RPM = 0.95 km/h 以上才允許 ReGen
+signed int BrakeStopSpeedPulses = 7;    // 233 馬達RPM = 0.44 km/h 以下停止 ReGen
 signed int MotorStartSpeedPulses = 0;
 unsigned int MOSFET_OverTemp = OVERTEMP_MOSFET_90;
 unsigned long ThrottleHighCntr = 0;  // used to start/stop
@@ -527,14 +542,17 @@ static void update_led_display(void) {
  */
 
 int main(void) {
-    HallMinPeriod = MINPERIOD;
-    // HallMinPeriod = 70;
+    // Q15 速度刻度基準：Speed = HallMinPeriod / HallPeriodFiltered
+    // HALL_MIN_PERIOD 由 motor_scale.h 依極對數與 SPEED_FS_RPM 推導 (= 434)，
+    // 該檔的 #error 護欄保證此值不會在未同步重算命令域/PI 增益的情況下被改動。
+    HallMinPeriod = HALL_MIN_PERIOD;
     HallPeriod = 30000;
 
     /* Initialize Peripherals */
     Init_Peripherals();
     SW_12V = TURN_ON;  // must before CAN_Initialize();
-    CAN1_Initialize();
+    // CAN1 已停用：RB8/RB9 (原 CAN1TX/RX) 改配置給 X2CScope 專屬 UART2。
+    // CAN1_Initialize();
     // SCCP3_TMR_Initialize();
     // CN_Configure();
     OverCurrentEnable();
@@ -600,10 +618,12 @@ int main(void) {
     O_RS485_RE_TRIS = 0;  // RS485方向控制設為輸出
     O_RS485_RE_LAT = 0;   // 初始設為接收模式
 #endif
-    O_CAN_STB_TRIS = 0;  // CAN待機控制設為輸出
-    O_CAN_STB_LAT = 0;   // 初始啟動(非待機)
-    O_CAN_TX_TRIS = 0;   // CAN TX設為輸出
-    I_CAN_RX_TRIS = 1;   // CAN RX設為輸入
+    // CAN 已停用：RB8/RB9 (原 CAN_TX/CAN_RX) 改由 X2CScope 專屬 UART2 使用，
+    // 其 TRIS/PPS 已於 port_config.c 的 MapGPIOHWFunction() 設定。
+    // O_CAN_STB_TRIS = 0;  // CAN待機控制設為輸出 (RB7)
+    // O_CAN_STB_LAT = 0;   // 初始啟動(非待機)
+    // O_CAN_TX_TRIS = 0;   // CAN TX設為輸出 (RB8 -> 現為 U2TX)
+    // I_CAN_RX_TRIS = 1;   // CAN RX設為輸入 (RB9 -> 現為 U2RX)
 
     // 數位輸入初始化
     I_BRAKE_TRIS = 1;             // IBKS - 煞車訊號輸入
@@ -616,8 +636,8 @@ int main(void) {
 
     InitDigitalInputPullups();
     SetupTimer1();
-#if CODESW_SCOPE_ENABLE == 1
-    DiagnosticsInit();
+#if CODESW_X2C_SCOPE_ENABLE == 1
+    DiagnosticsInit();  // 初始化 X2CScope 專屬 UART2 (RB8/RB9) 與 X2C 連線
 #endif
 #if CODESW_MODBUS_SCHEDULER_ENABLE == 1
     // ===== 最簡單UART測試初始化 =====
@@ -801,7 +821,9 @@ int main(void) {
     IqSquare.RatedIq = RATED_CURRENT_Q15;
 
     g_stSystemData.sStepTime = (S_MOTOR_STEP_TIME_T){0, 0};
-#if CODESW_MODBUS_SCHEDULER_ENABLE && CODESW_THROTTLE_ENABLE
+#if CODESW_THROTTLE_ENABLE
+    // 不再與 Modbus 綁定：油門邏輯一律讀 sSharedData.u8AssistLevel，
+    // 若 Modbus 停用而這裡沒初始化，助力等級會是 0，油門行為就會不對。
     g_stSystemData.sSharedData.u8AssistLevel = THROTTLE_ASSIST_LEVEL_DEFAULT;
 #endif
 
@@ -938,7 +960,9 @@ int main(void) {
 
 #if CODESW_MODBUS_SCHEDULER_ENABLE == 1
         // 執行正常的 Modbus 排程器
+#if CODESW_MODBUS_PROCESS_SUSPEND == 0
         modbusService_process();
+#endif
 #if CODESW_RS485_TEST_ENABLE == 1
         static uint32_t u32LastTime = 0;
 
@@ -995,23 +1019,32 @@ int main(void) {
         }
         {
 #if CODESW_SPEED_TEST == 0
-            // --- Original Speed Calculation ---
             // ------------------------------------------------------------------
-            // 計算車速
+            // 計算車速：Q15 Speed -> 車輪 RPM -> km/h
+            //
+            // [FIX] 舊版是三個互相補償的錯誤湊出來的結果：
+            //   (1) 把原始 Q15 Speed 當成「RPM*10」直接餵進 LwfocGetExternalRpm()
+            //       (真正做 Q15->RPM 的 LwfocGetInternalRpm() 反而沒被呼叫)；
+            //   (2) 用 HALL_PPR=610 與極對數 12 湊出 ÷5.083，再乘上當時 Speed 刻度
+            //       偏小 4 倍，合成 ÷20.33 剛好等於真實齒比 20.3；
+            //   (3) 吋->km/h 係數用 440 (正確為 479)，−8.1% 又把 (1)(2) 殘留的
+            //       +9.0% 抵掉，淨誤差 +0.2%，所以顯示看起來是對的。
+            //   現改為明確的兩段換算：SPEED_FS_RPM 定義 Q15 刻度，
+            //   GEAR_RATIO_X100 定義齒比，係數改回 479。
+            // ------------------------------------------------------------------
             // 從馬達邏輯模組獲取目前設定的輪徑 (單位: 吋 * 10)
             uint16_t u16WheelInches = logic_motor_getWheelDimension();
-            uint8_t u8PolePairs = logic_motor_getPolePairs();
-            uint16_t u16SensorPpr = logic_motor_getHallPPR();
 
-            uint16_t u16ExternalRpm = logic_motor_LwfocGetExternalRpm(abs(Speed),
-                                                                      u8PolePairs,
-                                                                      u16SensorPpr);
-            // 使用 RPM 和輪徑計算車速 (單位: KM/H * 100)
-            uint16_t u16SpeedKmh_x100 = logic_motor_getSpeedKmhFromRpm(u16ExternalRpm,
+            // Q15 Speed -> 車輪 RPM * 10 (含齒比，取絕對值)
+            uint16_t u16WheelRpmX10 = scale_speedToWheelRpmX10(Speed);
+
+            // 使用輪速 RPM 和輪徑計算車速 (單位: KM/H * 100)
+            uint16_t u16SpeedKmh_x100 = logic_motor_getSpeedKmhFromRpm(u16WheelRpmX10,
                                                                        u16WheelInches);
 
-            // 將結果轉換為 KM/H * 10 並存入共享資料結構中
-            g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10 = u16SpeedKmh_x100 / 10;
+            // 轉換為 KM/H * 10 存入共享資料結構。改用四捨五入：舊版直接截斷，
+            // 在新的 (更精確的) 換算下 7.19 km/h 會被截成 7.1，與實機顯示不符。
+            g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10 = (u16SpeedKmh_x100 + 5) / 10;
 #else
             // --- [NEW] Safe Speed Simulation ---
             static uint16_t s_u16SimulatedKmh_x10 = 0;
@@ -1054,31 +1087,27 @@ int main(void) {
 
 #endif
 #endif
-#if CODESW_SCOPE_ENABLE == 1
-        // ------------------------------------------------------------------
-        // 計算車速
-        // 從馬達邏輯模組獲取目前設定的輪徑 (單位: 吋 * 10)
-        uint16_t u16WheelInches = logic_motor_getWheelDimension();
-        uint8_t u8PolePairs = logic_motor_getPolePairs();
-        uint16_t u16SensorPpr = logic_motor_getHallPPR();
-
-        uint16_t u16ExternalRpm = logic_motor_LwfocGetExternalRpm(abs(Speed),
-                                                                  u8PolePairs,
-                                                                  u16SensorPpr);
-        // 使用 RPM 和輪徑計算車速 (單位: KM/H * 100)
-        uint16_t u16SpeedKmh_x100 = logic_motor_getSpeedKmhFromRpm(u16ExternalRpm,
-                                                                   u16WheelInches);
-
-        // 將結果轉換為 KM/H * 10 並存入共享資料結構中
-        // u16CurrentSpeedKmh_x10 = u16SpeedKmh_x100 / 10;
-        u16CurrentSpeedKmh_x10 = u16SpeedKmh_x100 / 10;
-
-#endif
+        // 車速本體算在 g_stSystemData.sSharedData 裡 (見上方 Modbus 區塊)，這裡鏡射一份
+        // 到獨立全域變數供 X2CScope 觀測。無條件執行，符號不隨開關消失。
+        u16CurrentSpeedKmh_x10 = g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10;
 
         // SpeedRefHighLimit = SpeedCtrlLimit;
-#if CODESW_SCOPE_ENABLE == 1
-        DiagnosticsStepMain();
+#if CODESW_X2C_SCOPE_ENABLE == 1
+        DiagnosticsStepMain();  // X2CScope 背景通訊 (UART2)
 #endif
+        {
+            // 【診斷】每秒統計一次主迴圈圈數 = 主迴圈頻率，供 Watch View 觀察。
+            static uint32_t u32LoopRateLastMs = 0;
+            static uint32_t u32LoopPasses = 0;
+            uint32_t u32NowMs = g_stSystemData.u32TimeMs;
+
+            u32LoopPasses++;
+            if ((u32NowMs - u32LoopRateLastMs) >= 1000UL) {
+                u32LoopRateLastMs = u32NowMs;
+                g_u32MainLoopHz = u32LoopPasses;
+                u32LoopPasses = 0;
+            }
+        }
 
         if (PollingCntr >= 400)  // 20ms
         {
@@ -1287,7 +1316,6 @@ int main(void) {
                     (((piInputOmega.inReference > 0) && (piInputOmega.inMeasure < 0)) ||
                      ((piInputOmega.inReference < 0) && (piInputOmega.inMeasure > 0)));
 
-#if CODESW_SCOPE_ENABLE == 1
                 E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(g_stSystemData.u16IEMBMv,
                                                                        g_stSystemData.i16TargetRpm,  // 使用者意圖轉速
                                                                        ReferenceRAW,                 // 馬達實際執行轉速
@@ -1295,16 +1323,6 @@ int main(void) {
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
                                                                        bEmbDirMismatch,              // [有動力倒溜] 命令/回授方向相反
                                                                        g_stSystemData.u32TimeMs);
-#endif
-#if CODESW_MODBUS_SCHEDULER_ENABLE == 1
-                E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(g_stSystemData.u16IEMBMv,
-                                                                       g_stSystemData.i16TargetRpm,  // 使用者意圖轉速
-                                                                       ReferenceRAW,                 // 馬達實際執行轉速
-                                                                       bEmbUVWLockActive,            // [Plan A] UVW短路生效中
-                                                                       bEmbReverseEdge,              // [Plan B] 偵測到倒溜
-                                                                       bEmbDirMismatch,              // [有動力倒溜] 命令/回授方向相反
-                                                                       g_stSystemData.u32TimeMs);
-#endif
 
                 // --- [NEW] Final safety check to override brake action ---
                 if (g_stSystemData.bMotorStop) {
@@ -1745,12 +1763,7 @@ void DoControl(void) {
     } else {
 #if CODESW_THROTTLE_ENABLE == 1
         // 判斷是否可以更新方向
-#if CODESW_SCOPE_ENABLE == 1
-        if (u16CurrentSpeedKmh_x10 <= CODESW_DIRECTION_CHANGE_SPEED_THRESHOLD) {
-#endif
-#if CODESW_MODBUS_SCHEDULER_ENABLE == 1
             if (g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10 <= CODESW_DIRECTION_CHANGE_SPEED_THRESHOLD) {
-#endif
                 // 當速度小於 速度限制，才進行方向更新
                 // #if CODESW_MOTOR_DIRECTION_DEFAULT == 0
 
@@ -1773,23 +1786,12 @@ void DoControl(void) {
             // 油門控制邏輯
             uint16_t u16lTargetRpm;
             uint16_t u16lCurrentRpm = (uint16_t)g_stSystemData.i16CurrentRpm;
-#if CODESW_SCOPE_ENABLE
-            int8_t i8ThrottleResult = logic_throttle_getUpdateParams(&g_stSystemData.sStepTime,
-                                                                     &u16lTargetRpm,
-                                                                     u16lCurrentRpm,
-                                                                     g_stSystemData.u16ThrottleVRMv,  // Pass mV value
-                                                                     g_stSystemData.bMotorDirection,
-                                                                     THROTTLE_ASSIST_LEVEL_DEFAULT);
-#endif
-#if CODESW_MODBUS_SCHEDULER_ENABLE
             int8_t i8ThrottleResult = logic_throttle_getUpdateParams(&g_stSystemData.sStepTime,
                                                                      &u16lTargetRpm,
                                                                      u16lCurrentRpm,
                                                                      g_stSystemData.u16ThrottleVRMv,  // Pass mV value
                                                                      g_stSystemData.bMotorDirection,
                                                                      g_stSystemData.sSharedData.u8AssistLevel);
-
-#endif
             if (u16lTargetRpm > 32767) {
                 g_stSystemData.i16TargetRpm = 32767;
             } else {
@@ -1859,11 +1861,7 @@ void DoControl(void) {
             // 1. 準備 `logic_vr_getUpdateParams` 所需的參數
             g_stSystemData.u16ThrottleVRRaw = (ADCBUF_THROTTLE_VR >> 4);
             uint16_t u16lCurrentSpeedKmh_x10;
-#if CODESW_SCOPE_ENABLE == 1
-            u16lCurrentSpeedKmh_x10 = u16CurrentSpeedKmh_x10;
-#else
-    u16lCurrentSpeedKmh_x10 = g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10;
-#endif
+            u16lCurrentSpeedKmh_x10 = g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10;
 
             // 2. 呼叫VR邏輯模組，獲取經過安全檢查後的目標轉速 (i16TargetRpm) 和 Step/Time 參數
             int8_t i8VrResult = logic_vr_getUpdateParams(&g_stSystemData.sStepTime,
@@ -2452,11 +2450,12 @@ void DoControl(void) {
 
         // OvertemperatureDetectMCU();
         OvertemperatureDetectMOSFET();
-#if CODESW_SCOPE_ENABLE == 1
+        // X2CScope 觀測用的佔空比取樣。無條件執行，符號不隨開關消失。
         X2CPG1Duty = INVERTERA_PWM_PDC1;
         X2CPG2Duty = INVERTERA_PWM_PDC2;
         X2CPG3Duty = INVERTERA_PWM_PDC3;
-        DiagnosticsStepIsr();
+#if CODESW_X2C_SCOPE_ENABLE == 1
+        DiagnosticsStepIsr();  // X2CScope 取樣更新 (UART2)
 #endif
         // Clear Interrupt Flag
         ClearADCIF();

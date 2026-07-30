@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LWFDSPC Worklog - X2CScope / Modbus Debug - 2026-07-29</title>
+<style>
+  :root {
+    --bg:#101820; --panel:#182531; --fg:#e8eef4; --muted:#9fb1c1;
+    --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+    --code:#0b1118; --border:#2d3b49;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+    background:var(--bg); color:var(--fg); line-height:1.62;
+  }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 72px; }
+  h1 { margin:0 0 6px; font-size:1.85rem; letter-spacing:0; }
+  .sub { margin:0 0 26px; color:var(--muted); font-size:.95rem; }
+  .card {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; padding:20px 24px; margin:0 0 18px;
+  }
+  h2 {
+    margin:0 0 12px; padding-left:10px; border-left:4px solid var(--accent);
+    font-size:1.22rem;
+  }
+  h3 { margin:18px 0 8px; color:var(--accent); font-size:1.02rem; }
+  p { margin:8px 0; }
+  ul { margin:8px 0 8px 20px; padding:0; }
+  li { margin:4px 0; }
+  code {
+    background:var(--code); color:#ffd580; border-radius:4px;
+    padding:1px 6px; font-family:Consolas,"Courier New",monospace; font-size:.9em;
+  }
+  pre {
+    background:var(--code); border:1px solid var(--border); border-radius:8px;
+    padding:13px 15px; overflow-x:auto; font-family:Consolas,"Courier New",monospace;
+    font-size:.86rem; line-height:1.48;
+  }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.92rem; }
+  th, td { border:1px solid var(--border); padding:8px 10px; text-align:left; }
+  th { background:rgba(88,166,255,.12); color:#d9ebff; }
+  .tag {
+    display:inline-block; margin-left:8px; padding:2px 9px; border-radius:999px;
+    font-size:.72rem; font-weight:700; vertical-align:middle;
+  }
+  .ok { color:var(--ok); font-weight:600; }
+  .warn { color:var(--warn); font-weight:600; }
+  .bad { color:var(--bad); font-weight:600; }
+  .tag.ok { background:rgba(63,185,80,.18); }
+  .tag.warn { background:rgba(210,153,34,.18); }
+  .file { color:var(--muted); font-family:Consolas,"Courier New",monospace; font-size:.86rem; }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:34px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LWFDSPC Worklog: X2CScope / Modbus Debug</h1>
+  <p class="sub">Project: Longwin_LWFDSPC_V0.1 / LWFDSPC.X &nbsp;|&nbsp; Date: 2026-07-29 &nbsp;|&nbsp; Result: Scope View fixed</p>
+
+  <div class="card">
+    <h2>1. 問題現象 <span class="tag warn">SYMPTOM</span></h2>
+    <p>X2CScope 可以連線，Watch View 正常，但 Scope View 會跳出 <code>Invalid Block ID</code>。</p>
+    <p>關鍵對照條件：</p>
+    <ul>
+      <li><code>MODBUS</code> enabled: Watch View OK，Scope View error。</li>
+      <li><code>MODBUS</code> totally disabled: X2CScope Watch View / Scope View 都正常。</li>
+    </ul>
+    <p>這表示 UART2 實體連線與基本 X2C protocol 不太像是主因，問題更像是 Modbus 啟用後破壞了 X2CScope 的內部狀態。</p>
+  </div>
+
+  <div class="card">
+    <h2>2. 排查線索 <span class="tag ok">EVIDENCE</span></h2>
+    <table>
+      <tr><th>Watch variable</th><th>Result</th><th>Interpretation</th></tr>
+      <tr><td><code>g_u16X2cTxFifoDropCount</code></td><td>0</td><td>TX software FIFO 沒有掉資料。</td></tr>
+      <tr><td><code>g_u16X2cRxFifoDropCount</code></td><td>0</td><td>RX software FIFO 沒有掉資料。</td></tr>
+      <tr><td><code>g_u16X2cRxOerrCount</code>, <code>Ferr</code>, <code>Perr</code></td><td>0</td><td>UART2 沒有 overrun/framing/parity error。</td></tr>
+      <tr><td><code>g_u16X2cDiagSignature</code></td><td>42435 / 0xA5C3</td><td>X2CScope GUI 載入的 ELF 與 firmware symbol 對版。</td></tr>
+      <tr><td><code>g_u16X2cUpdateSkipCount</code></td><td>曾快速累積</td><td><code>Communicate()</code> 節奏太貪心時，會壓縮 <code>Update()</code> 機會。</td></tr>
+    </table>
+    <p>結論：transport clean，所以轉向檢查 Modbus RAM layout 與 X2CScope internal RAM 是否被踩到。</p>
+  </div>
+
+  <div class="card">
+    <h2>3. 根因 <span class="tag ok">ROOT CAUSE</span></h2>
+    <p>Modbus raw register buffer 採用「Modbus register address 直接當 array index」的寫法，但原本陣列長度沒有預留 index 0，造成最高 register address 越界。</p>
+    <h3>例子</h3>
+    <pre>LCD register range: 0x0001 - 0x0011
+Code access:        u16Regs[0x11]
+Required length:    0x12 words, valid index 0..0x11
+
+Old layout:         17 words, valid index 0..16
+Out of bounds:      u16Regs[17] == u16Regs[0x11]</pre>
+    <p>PC-GUI 也有同樣問題：最高使用 <code>u16Regs[0x1D]</code>，所以需要 <code>0x1E</code> words。Battery decode 使用到 <code>u16Regs[0x09]</code>，也需要 <code>0x0A</code> words。</p>
+    <p>此越界只在 Modbus enabled 且資料被 encode/decode 或 register map task 寫入時出現，因此症狀與「關掉 Modbus 後 X2CScope 正常」完全吻合。</p>
+  </div>
+
+  <div class="card">
+    <h2>4. 修改內容 <span class="tag ok">FIX</span></h2>
+    <h3>Modbus buffer size / indexing</h3>
+    <p class="file">src/longwin/s_modbus_master.h</p>
+    <pre>Battery raw: u16Regs[0x0A]  // valid Modbus addresses 0x0001-0x0009
+LCD raw:     u16Regs[0x12]  // valid Modbus addresses 0x0001-0x0011
+PC-GUI raw:  u16Regs[0x1E]  // valid Modbus addresses 0x0001-0x001D</pre>
+
+    <h3>Battery register map pointer</h3>
+    <p class="file">src/longwin/s_modbus_master.c</p>
+    <pre>{SLAVE_ID_BATTERY, 0x0001, 9, E_MODBUS_DIR_READ,
+ &amp;g_stModbusAllData.uBatteryData.u16Regs[0x01]}</pre>
+
+    <h3>Initial LCD write state machine</h3>
+    <p>初次 LCD write 送出後，加入 <code>siCurrentMapIndex = i;</code>，避免等待回應時用錯 task 解析 response。</p>
+
+    <h3>Mirror helper bounds</h3>
+    <p class="file">src/longwin/s_modbus_decode.c</p>
+    <p><code>modbusDecode_getMirroredValue()</code> / <code>setMirroredValue()</code> 改成依 device 選對應 buffer 與實際長度，不再用 LCD struct size 推算所有 device offset。</p>
+  </div>
+
+  <div class="card">
+    <h2>5. X2CScope 節奏調整 <span class="tag warn">TUNING</span></h2>
+    <p class="file">diagnostics/diagnostics_x2cscope.c</p>
+    <pre>#define X2C_TX_FIFO_SIZE 512u
+#define X2C_TX_FIFO_READY_MARGIN 96u
+#define X2C_COMM_MAX_CALLS_PER_PASS 24u</pre>
+    <ul>
+      <li>每圈 main loop 最多呼叫 <code>X2CScope_Communicate()</code> 24 次。</li>
+      <li>若 TX FIFO free space 小於 96 bytes，提前停止本圈 X2C communicate。</li>
+      <li><code>X2CScope_Update()</code> 仍在 ADC ISR 嘗試執行；若剛好正在 <code>Communicate()</code>，就 skip 一次，避免 library re-entry。</li>
+    </ul>
+    <p>這不是主要根因修正，但可避免 X2C 背景通訊長時間霸住主迴圈，降低 Scope View 在大量資料時的壓力。</p>
+  </div>
+
+  <div class="card">
+    <h2>6. 新增診斷變數 <span class="tag ok">DIAGNOSTICS</span></h2>
+    <h3>X2CScope counters</h3>
+    <pre>g_u16X2cUpdateCount
+g_u16X2cCommunicateCount
+g_u16X2cCommunicatePassMax
+g_u16X2cTxFifoUsedNow
+g_u16X2cRxFifoUsedNow</pre>
+
+    <h3>Modbus guard / state counters</h3>
+    <pre>g_au16ModbusGuard[8]
+g_u16ModbusGuardErrorCount
+g_u16ModbusCurrentMapIndex
+g_u16ModbusState
+g_u16ModbusLastRxLen
+g_u16ModbusParseFailCount</pre>
+    <p><code>g_u16ModbusGuardErrorCount</code> 若增加，表示仍有 Modbus 附近 RAM 被越界寫入。修正後目前實測為 0。</p>
+  </div>
+
+  <div class="card">
+    <h2>7. 驗證結果 <span class="tag ok">VERIFIED</span></h2>
+    <p class="ok">使用者回報：Scope View 目前 no error。</p>
+    <table>
+      <tr><th>Variable</th><th>Observed</th><th>Status</th></tr>
+      <tr><td><code>g_u16ModbusGuardErrorCount</code></td><td>0</td><td class="ok">OK</td></tr>
+      <tr><td><code>g_u16X2cTxFifoDropCount</code></td><td>0</td><td class="ok">OK</td></tr>
+      <tr><td><code>g_u16X2cRxFifoDropCount</code></td><td>0</td><td class="ok">OK</td></tr>
+      <tr><td><code>g_u16X2cUpdateCount</code></td><td>63175</td><td class="ok">Running</td></tr>
+      <tr><td><code>g_u16X2cUpdateSkipCount</code></td><td>2838</td><td class="ok">Acceptable</td></tr>
+      <tr><td><code>g_u16X2cDiagSignature</code></td><td>42435 / 0xA5C3</td><td class="ok">ELF matched</td></tr>
+    </table>
+    <p>Build command verified clean:</p>
+    <pre>&amp; 'C:\Program Files\Microchip\MPLABX\v6.25\gnuBins\GnuWin32\bin\make.exe' -f Makefile CONF=default clean build</pre>
+    <p>Generated firmware:</p>
+    <pre>dist/default/production/LWFDSPC.X.production.hex</pre>
+  </div>
+
+  <div class="card">
+    <h2>8. 後續觀察項</h2>
+    <ul>
+      <li>長時間測試 10-30 分鐘：Scope View enabled + Modbus enabled。</li>
+      <li><code>g_u16ModbusGuardErrorCount</code> 必須維持 0。</li>
+      <li><code>g_u16X2cTxFifoDropCount</code> / <code>g_u16X2cRxFifoDropCount</code> 必須維持 0。</li>
+      <li><code>g_u16X2cUpdateSkipCount / g_u16X2cUpdateCount</code> 建議長時間低於約 10%。</li>
+      <li>若之後想加快 Scope View，可以試 <code>X2C_COMM_MAX_CALLS_PER_PASS</code> = 32 或 48；若穩定優先可降到 16。</li>
+    </ul>
+  </div>
+
+  <p class="foot">Generated 2026-07-29 - LWFDSPC.X debug worklog</p>
+</div>
+</body>
+</html>

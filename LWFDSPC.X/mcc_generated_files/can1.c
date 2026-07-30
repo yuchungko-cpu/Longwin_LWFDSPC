@@ -785,7 +785,7 @@ bool CAN1_Receive(CAN_MSG_OBJ *rxCanMsg)
         //If message object is available
         if(CAN_RX_MSG_AVAILABLE == (rxMsgStatus & CAN_RX_MSG_AVAILABLE)) 
         {           
-            if(*(fifoInfo.address) != NULL)
+            if(*(fifoInfo.address) != 0U)
             {
                 CAN1_MessageReadFromFifo((uint16_t *) *fifoInfo.address, rxCanMsg);
                 CAN1_RX_FIFO_IncrementMsgPtr(fifoChannel);
@@ -842,7 +842,7 @@ CAN_TX_MSG_REQUEST_STATUS CAN1_Transmit(const CAN1_TX_FIFO_CHANNELS fifoChannel,
     {
         if(CAN_TX_FIFO_AVAILABLE == CAN1_TransmitFIFOStatusGet(fifoChannel))
         {
-            if(*(fifoInfo.address) != NULL) 
+            if(*(fifoInfo.address) != 0U) 
             {
                 CAN1_MessageWriteToFifo((uint16_t *) *fifoInfo.address, txCanMsg);
                 CAN1_TX_FIFO_MessageSendRequest(fifoChannel);

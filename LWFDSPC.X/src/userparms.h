@@ -46,6 +46,7 @@ extern "C" {
 #include <stdint.h>
 #include "../hal/clock.h"
 
+#include "motor_scale.h"  // 極對數/齒比/Q15 速度刻度的唯一來源
 #include "longwin/s_logic_motor.h"
 
 #ifdef __XC16__  // See comments at the top of this header file
@@ -94,45 +95,29 @@ extern "C" {
 /********************  support xls file definitions begin *********************/
 /* The following values are given in the xls attached file */
 
-/* Motor's number of pole pairs */
-// 10: Longwin 48V 350W Hub
-#ifdef LOGIC_MOTOR_DEFAULT_POLE_PAIRS
-#define NOPOLESPAIRS LOGIC_MOTOR_DEFAULT_POLE_PAIRS
-#else
-#define NOPOLESPAIRS 10
-#endif
-/* Open loop speed ramp up end value Value in RPM*/
-#define MINIMUM_SPEED_RPM 100
-/* Maximum speed of the motor in RPM - given by the motor's manufacturer */
-#define MAXIMUM_SPEED_RPM 3000
-#define MAXSPEED_REF_LIMIT 2000   // should be less than MAXIMUM_SPEED_RPM (RPM value)
-#define MAXSPEED_CtrlMode_2 1160  // Max speed for CtrlMode = 2 (RPM value)
-#define Q15_MAXSPEED_REF_LIMIT MAXSPEED_REF_LIMIT * 32768 / MAXIMUM_SPEED_RPM
-#define Q15_MAXSPEED_CtrlMode_2 MAXSPEED_CtrlMode_2 * 32768 / MAXIMUM_SPEED_RPM
+/* 極對數、齒比、Q15 速度滿刻度、Timer1 前除器、Hall 週期基準 (HALL_MIN_PERIOD)
+ * 全部移至 src/motor_scale.h 統一定義。
+ * 已移除的舊巨集 (皆為無引用或已被取代)：
+ *   NOPOLESPAIRS / MAXIMUM_SPEED_RPM  -> MOTOR_POLE_PAIRS / SPEED_FS_RPM
+ *   MINPERIOD                         -> HALL_MIN_PERIOD (值仍為 434)
+ *   MINIMUM_SPEED_RPM / *_SPEED_ELECTR / SPEED_MULTIPLIER_1,2 / SPEED_MULTI_ELEC
+ *   MAXPERIOD / PERIOD_CONSTANT       (無引用，且 MAXPERIOD 算式漏除 6*60，錯 100 倍)
+ */
+#define MAXSPEED_REF_LIMIT 2000   // 速度模式轉速上限 (機械 RPM)
+#define MAXSPEED_CtrlMode_2 1160  // CtrlMode = 2 的轉速上限 (機械 RPM)
+// 註：下列兩個 Q15 上限的消費者 (SpeedModeCtrlLimit / SpeedCtrlLimit) 目前全部位於
+//     main.c 的 #if 0 死碼區 (2019-2208)，僅保留以維持 main.c:810/812 可編譯。
+#define Q15_MAXSPEED_REF_LIMIT RPMX10_TO_CMD(MAXSPEED_REF_LIMIT * 10)
+#define Q15_MAXSPEED_CtrlMode_2 RPMX10_TO_CMD(MAXSPEED_CtrlMode_2 * 10)
 
 /* The following values are given in the xls attached file */
 #define NORM_CURRENT_CONST 0.000214
 /**********************  support xls file definitions end *********************/
 
-#define MINIMUM_SPEED_ELECTR (MINIMUM_SPEED_RPM * NOPOLESPAIRS)
-#define MAXIMUM_SPEED_ELECTR (MAXIMUM_SPEED_RPM * NOPOLESPAIRS)
-#define SPEED_MULTIPLIER_1 10500
-#define SPEED_MULTIPLIER_2 12500
-
-#define TIMER_PRESCALER 64
-// Period Calculation
-// MINCOUNTS = DFCY/T2 scale/(Max RPM/60)/6/PolePairs
-#define MAXPERIOD (unsigned long)(((float)FCY / (float)TIMER_PRESCALER) / (float)((MINIMUM_SPEED_RPM * NOPOLESPAIRS) * 10))
-#define MINPERIOD (unsigned long)(((float)FCY / (float)TIMER_PRESCALER) / (float)(MAXIMUM_SPEED_RPM / 60) / 6 / NOPOLESPAIRS)
-// #define MINPERIOD 70
-// Maximum number of ticks in lowest speed for the counter used
-#define PERIOD_CONSTANT (unsigned long)((float)MAXPERIOD * (float)MINIMUM_SPEED_RPM)
-
 //(FCY/(TIMER_PRESCALER*FPWM)*(65536/6))
+// 註：換相角度步進與極對數無關 (每 60 度電氣角一個 Hall 邊緣)，故不受刻度變更影響。
 #define PHASE_INC_CALC (unsigned long)((float)FCY / ((float)(TIMER_PRESCALER) * (float)(PWMFREQUENCY_HZ)) * (float)(65536 / 6))
 #define ANGLESTEP (unsigned long)((float)FCY / ((float)(TIMER_PRESCALER) * (float)(PWMFREQUENCY_HZ)) * (float)(65536 / 6))
-/**  SPEED MULTIPLIER CALCULATION = ((FCY*60)/(TIMER_PRESCALER*POLEPAIRS)) ---FOR RPM  */
-#define SPEED_MULTI_ELEC (unsigned long)(((float)FCY / (float)(TIMER_PRESCALER)) * (float)60)
 
 /* current transformation macro, used below */
 #define NORM_CURRENT(current_real) (Q15(current_real / NORM_CURRENT_CONST / 32768))
@@ -170,7 +155,18 @@ minimum value accepted */
 #define Q_CURRCNTR_CTERM Q15(0.999)
 #define Q_CURRCNTR_OUTMAX 0x7FFF
 
-/* Velocity Control Loop Coefficients */
+/* Velocity Control Loop Coefficients
+ * 【重要】速度環的誤差 (inReference - inMeasure) 是 Q15 命令 count，其物理意義由
+ *   motor_scale.h 的 SPEED_FS_RPM 決定。因此下列增益與 SPEED_FS_RPM 成反比綁定：
+ *     SPEEDCNTR_PTERM 為 Q1.11 格式 (見 motor_control_declarations.h)，
+ *     有效 Kp = 3000/2048 = 1.465 (輸出 count / 誤差 count)
+ *             = 每 1 馬達RPM 誤差產生 4.0 counts 的 Iq 命令
+ *     有效 Ki = 10/32768，速度環 1kHz → 每 1 count 誤差每 ms 累加 3.05e-4
+ *   若改動 SPEED_FS_RPM，兩者必須同乘 (舊FS/新FS) 才能維持相同騎乘感。
+ *   motor_scale.h 的 HALL_MIN_PERIOD != 434 護欄即為此而設。
+ * 飽和門檻：outMax 由溫控電流上限覆寫 (常態 Q15(0.33)=10813)，
+ *   → 誤差 >= 10813/1.465 = 7382 counts (2703 馬達RPM) 即滿輸出。
+ */
 #if 0
 #define SPEEDCNTR_PTERM Q15(0.2)
 #define SPEEDCNTR_ITERM Q15(0.006)
@@ -209,9 +205,11 @@ minimum value accepted */
 #define OVERTEMP_COUNTER 20      // 過溫計數器閾值，20 x 50us = 1ms (counter value)
 
 // 馬達堵轉保護 (MotorStallDetect is executed every 20ms)
-#define MOTOR_STALL_COMMAND_THRESHOLD 1000     // Target RPM above this value is treated as a drive request
-#define MOTOR_STALL_SPEED_THRESHOLD Q15(0.03)  // Treat near-zero speed as stall, not only Speed == 0
-#define MOTOR_STALL_SPEED_RELEASE_THRESHOLD Q15(0.06) // Moving clearly again; reset stall counter
+// 註：下列門檻的物理值以 SPEED_FS_RPM=12000、齒比 20.3、8 吋輪換算
+//     (1 count = 0.366 馬達 RPM = 0.00069 km/h)
+#define MOTOR_STALL_COMMAND_THRESHOLD 1000     // 命令 count；366 馬達RPM = 0.69 km/h 以上視為要求驅動
+#define MOTOR_STALL_SPEED_THRESHOLD Q15(0.03)  // 983 count = 360 馬達RPM = 0.68 km/h 以下視為堵轉(不只 Speed==0)
+#define MOTOR_STALL_SPEED_RELEASE_THRESHOLD Q15(0.06) // 1966 count = 720 馬達RPM = 1.36 km/h，確實在動→清計數器
 #define MOTOR_STALL_RELEASE_CNTR 25            // 25 x 20ms = 500ms clear movement to release stall limiting
 #define MOTOR_STALL_CURRENT_LIMIT_CNTR 400     // 400 x 20ms = 8s, reduce current
 #define MOTOR_STALL_LOCK_CNTR 3000             // 3000 x 20ms = 60s, stop output and latch
@@ -219,15 +217,19 @@ minimum value accepted */
 #define MOTOR_STALL_CNTR MOTOR_STALL_LOCK_CNTR // Legacy alias: final stall lock threshold
 
 // UVW low-speed lock entry filter (speed profile task is executed every 1ms)
-#define UVW_LOCK_SPEED_THRESHOLD Q15(0.01)      // 進鎖速度門檻 (~1% of MAXIMUM_SPEED_RPM ≈ 30RPM)
+#define UVW_LOCK_SPEED_THRESHOLD Q15(0.01)      // 328 count = 120 馬達RPM = 0.23 km/h (舊註解「≈30RPM」是按錯誤的極對數 12 算的)
 #define UVW_LOCK_CURRENT_THRESHOLD Q15(0.02)    // (保留) 舊版進鎖電流門檻；新版遲滯邏輯已不使用
-#define UVW_LOCK_RELEASE_REF 500                // 油門目標(ReferenceRAW/output scale)高於此值則解鎖；鬆油門=0，踩下時 >= OUTPUT_MIN(1500)
-#define UVW_LOCK_STOP_PULSES 3                  // 進鎖脈衝門檻：HallPulsesLatch < 此值視為已接近靜止 (7≈馬達58RPM, 極對數12)。獨立於 ReGen 的 BrakeStopSpeedPulses,調此值不影響 ReGen 起煞點
+#define UVW_LOCK_RELEASE_REF 500                // 油門目標高於此值則解鎖；183 馬達RPM = 0.35 km/h。鬆油門=0，踩下時 >= OUTPUT_MIN(=1500 count)
+// 進鎖脈衝門檻：HallPulsesLatch(每100ms邊緣數) < 此值視為已接近靜止。
+// 換算 (18 邊緣/機械轉, 齒比 20.3)：1 pulse/100ms = 33.3 馬達RPM = 0.063 km/h
+//   → 3 pulses = 100 馬達RPM = 0.19 km/h  (舊註解「7≈馬達58RPM, 極對數12」已失效)
+// 獨立於 ReGen 的 BrakeStopSpeedPulses，調此值不影響 ReGen 起煞點。
+#define UVW_LOCK_STOP_PULSES 3
 
 // 有動力倒溜/倒衝偵測門檻 (命令方向與帶號回授異號 → EMB failsafe)。用 piInputOmega.inReference/inMeasure。
-#define EMB_ROLLBACK_CMD_THRESHOLD 500          // |inReference| 需 >= 此值(確實在要某方向;OUTPUT_MIN=1500)
-#define EMB_ROLLBACK_SPEED_THRESHOLD Q15(0.02)  // |inMeasure|(Speed,Q15) 需 >= 此值(確實往反向動)
-#define EMB_ROLLBACK_MIN_PULSES 3               // HallPulsesLatch >= 此值(確實在滾動;擋靜止抖動/32767尖峰)
+#define EMB_ROLLBACK_CMD_THRESHOLD 500          // |inReference| 需 >= 此值；183 馬達RPM = 0.35 km/h (OUTPUT_MIN=1500 count)
+#define EMB_ROLLBACK_SPEED_THRESHOLD Q15(0.02)  // |inMeasure|(Speed,Q15) 需 >= 此值；655 count = 240 馬達RPM = 0.45 km/h
+#define EMB_ROLLBACK_MIN_PULSES 3               // HallPulsesLatch >= 此值(確實在滾動)；3 pulses = 100 馬達RPM = 0.19 km/h
 
 // 電壓向量限制
 #define MAX_VOLTAGE_VECTOR 0.95  // 最大電壓向量限制為 95%，用於 SVPWM 調變
@@ -407,13 +409,17 @@ minimum value accepted */
 #define O_CAN_STB_LAT _LATB7  // STB, CAN Standby
 #define O_CAN_STB_TRIS _TRISB7
 
-// Pin 48: RB8 (CAN_TX) - CAN傳送
-#define O_CAN_TX_PIN _RB8  // CAN_TX, CAN Transmit
+// Pin 48: RB8 - 原 CAN_TX，CAN 停用後改為 X2CScope 專屬 UART2 傳送 (U2TX)
+#define O_CAN_TX_PIN _RB8  // CAN_TX, CAN Transmit (deprecated: now X2C U2TX)
 #define O_CAN_TX_TRIS _TRISB8
+#define O_X2C_TX_PIN _RB8   // X2CScope U2TX (RB8, RP40)
+#define O_X2C_TX_TRIS _TRISB8
 
-// Pin 49: RB9 (CAN_RX) - CAN接收
-#define I_CAN_RX_PIN _RB9  // CAN_RX, CAN Receive
+// Pin 49: RB9 - 原 CAN_RX，CAN 停用後改為 X2CScope 專屬 UART2 接收 (U2RX)
+#define I_CAN_RX_PIN _RB9  // CAN_RX, CAN Receive (deprecated: now X2C U2RX)
 #define I_CAN_RX_TRIS _TRISB9
+#define I_X2C_RX_PIN _RB9   // X2CScope U2RX (RB9, RP41)
+#define I_X2C_RX_TRIS _TRISB9
 
 //-----------------------------------------------------------------------------
 // PWM Output pin definitions

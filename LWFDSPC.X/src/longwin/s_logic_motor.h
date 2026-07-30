@@ -3,23 +3,27 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "../motor_scale.h"  // MOTOR_POLE_PAIRS / SPEED_FS_RPM / GEAR_RATIO_X100
 
 // --- Merged from s_logic_motor_config.h ---
 
 // --- Default Motor Parameter Values ---
 // Based on longwinConrtrolFunction_chunchi.md
-#define LOGIC_MOTOR_DEFAULT_WHEEL_DIMENSION_INCH (80)                    // 預設輪徑 (7 吋 * 10)
-#define LOGIC_MOTOR_DEFAULT_POLE_PAIRS (12)                               // 預設馬達極對數 (Doc: 2~20, NOPOLESPAIRS is 10)
-#define LOGIC_MOTOR_DEFAULT_HALL_PPR (610)                                // 預設馬達霍爾每轉脈衝數 (51.7 Pulse/R * 10)
+#define LOGIC_MOTOR_DEFAULT_WHEEL_DIMENSION_INCH (80)                     // 預設輪徑 (8.0 吋 * 10)
+#define LOGIC_MOTOR_DEFAULT_POLE_PAIRS (MOTOR_POLE_PAIRS)                 // 馬達極對數 (實測 3；6 極馬達)
+// [DEPRECATED] 舊版用此欄位隱含代表減速齒比 (610/120 = 5.083，再配合當時 Speed 刻度
+//   偏小 4 倍，合成 ÷20.33 = 真實齒比)。齒比已改由 motor_scale.h 的 GEAR_RATIO_X100
+//   明確定義，本欄位與 logic_motor_setHallPPR/getHallPPR 已無 live 消費者。
+#define LOGIC_MOTOR_DEFAULT_HALL_PPR (610)                                // [DEPRECATED] 見上方說明
 #define LOGIC_MOTOR_DEFAULT_EXTERNAL_SENSOR_PPR (6)                       // 預設外部輪速感測器每轉脈衝數 (1~6 Pulse/R)
 #define LOGIC_MOTOR_DEFAULT_SPEED_SOURCE (LOGIC_MOTOR_SPEED_SOURCE_HALL)  // 預設速度來源 (0:IHU/Hall)
 
 // --- Calculation Constants (Integer versions) ---
 // Based on formulas in longwinConrtrolFunction_chunchi.md
-#define LOGIC_MOTOR_PROGRAM_SPEED_MAX_VALUE (32768)  // FOC 程式 Speed 參數最大值 32768
-#define LOGIC_MOTOR_PROGRAM_SPEED_RPM_FACTOR (3000)  // FOC 程式 Speed 參數轉 RPM 因子 3000
-#define LOGIC_MOTOR_KMH_CONVERSION_FACTOR (440)      // RPM 與輪徑轉 KM/H 的轉換因子 (0.0047878 * 100000)
-#define LOGIC_MOTOR_RPM_FROM_HALL_HZ_FACTOR (60)     // Hall 頻率轉 RPM 的轉換因子 (60)
+#define LOGIC_MOTOR_PROGRAM_SPEED_MAX_VALUE (32768)          // FOC 程式 Speed 參數最大值 32768
+#define LOGIC_MOTOR_PROGRAM_SPEED_RPM_FACTOR (SPEED_FS_RPM)  // Q15 滿刻度對應的機械 RPM (12000)
+#define LOGIC_MOTOR_KMH_CONVERSION_FACTOR (479)              // RPM 與輪徑轉 KM/H 的轉換因子 (0.0047878 * 100000)
+#define LOGIC_MOTOR_RPM_FROM_HALL_HZ_FACTOR (60)             // Hall 頻率轉 RPM 的轉換因子 (60)
 
 /**
  * @brief 速度感測器來源選擇

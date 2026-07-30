@@ -421,7 +421,7 @@ void modbusDecode_encodeGuiSettings(U_MODBUS_PC_GUI_DATA *pDest,
 
     //
     // Block 4: FW Version (Addr 0x0015) — 直接用韌體版本巨集,不依賴未賦值的來源欄位。
-    // 格式: (Category<<8)|(Major<<4)|Minor;目前 V0.13 = 0x0013 (見 s_modbus_decode.h)。
+    // 格式: (Category<<8)|(Major<<4)|Minor;目前 V0.15 = 0x0015 (見 s_modbus_decode.h)。
     uint16_t u16Version = ((uint16_t)FW_VER_CATEGORY << 8) | ((uint16_t)FW_VER_MAJOR << 4) | FW_VER_MINOR;
     pDest->u16Regs[0x15] = u16Version;
 
@@ -448,18 +448,38 @@ uint16_t modbusDecode_getMirroredValue(const S_MODBUS_ALL_DATA *pSrc,
                                        uint8_t u8SourceDeviceId,
                                        uint16_t u16SourceRegAddr)
 {
-    if (u8SourceDeviceId < 1 || u8SourceDeviceId > 3 || u16SourceRegAddr >= MIRROR_BLOCK_SIZE)
+    const uint16_t *pu16Regs = NULL;
+    uint16_t u16RegCount = 0;
+
+    if (pSrc == NULL || u16SourceRegAddr >= MIRROR_BLOCK_SIZE)
     {
-        return 0; // Invalid arguments
+        return 0;
     }
-    // This is a simplified example and might need adjustment based on the final U_MODBUS_ALL_DATA_RAW layout
-    const uint16_t *basePtr = (const uint16_t *)pSrc;
-    uint16_t index = ((u8SourceDeviceId - 1) * sizeof(S_MODBUS_LCD_APP_DATA_RAW) / 2) + u16SourceRegAddr;
-    if (index < 128)
+
+    switch (u8SourceDeviceId)
     {
-        return basePtr[index];
+    case SLAVE_ID_BATTERY:
+        pu16Regs = pSrc->uBatteryData.u16Regs;
+        u16RegCount = (uint16_t)(sizeof(pSrc->uBatteryData.u16Regs) / sizeof(pSrc->uBatteryData.u16Regs[0]));
+        break;
+    case SLAVE_ID_LCD:
+        pu16Regs = pSrc->uLcdData.u16Regs;
+        u16RegCount = (uint16_t)(sizeof(pSrc->uLcdData.u16Regs) / sizeof(pSrc->uLcdData.u16Regs[0]));
+        break;
+    case SLAVE_ID_PC_GUI:
+        pu16Regs = pSrc->uPcGuiData.u16Regs;
+        u16RegCount = (uint16_t)(sizeof(pSrc->uPcGuiData.u16Regs) / sizeof(pSrc->uPcGuiData.u16Regs[0]));
+        break;
+    default:
+        return 0;
     }
-    return 0; // Index out of bounds
+
+    if (u16SourceRegAddr >= u16RegCount)
+    {
+        return 0;
+    }
+
+    return pu16Regs[u16SourceRegAddr];
 }
 
 void modbusDecode_setMirroredValue(S_MODBUS_ALL_DATA *pDest,
@@ -467,15 +487,36 @@ void modbusDecode_setMirroredValue(S_MODBUS_ALL_DATA *pDest,
                                    uint16_t u16SourceRegAddr,
                                    uint16_t u16Value)
 {
-    if (u8SourceDeviceId < 1 || u8SourceDeviceId > 3 || u16SourceRegAddr >= MIRROR_BLOCK_SIZE)
+    uint16_t *pu16Regs = NULL;
+    uint16_t u16RegCount = 0;
+
+    if (pDest == NULL || u16SourceRegAddr >= MIRROR_BLOCK_SIZE)
     {
-        return; // Invalid arguments
+        return;
     }
-    // This is a simplified example and might need adjustment
-    uint16_t *basePtr = (uint16_t *)pDest;
-    uint16_t index = ((u8SourceDeviceId - 1) * sizeof(S_MODBUS_LCD_APP_DATA_RAW) / 2) + u16SourceRegAddr;
-    if (index < 128)
+
+    switch (u8SourceDeviceId)
     {
-        basePtr[index] = u16Value;
+    case SLAVE_ID_BATTERY:
+        pu16Regs = pDest->uBatteryData.u16Regs;
+        u16RegCount = (uint16_t)(sizeof(pDest->uBatteryData.u16Regs) / sizeof(pDest->uBatteryData.u16Regs[0]));
+        break;
+    case SLAVE_ID_LCD:
+        pu16Regs = pDest->uLcdData.u16Regs;
+        u16RegCount = (uint16_t)(sizeof(pDest->uLcdData.u16Regs) / sizeof(pDest->uLcdData.u16Regs[0]));
+        break;
+    case SLAVE_ID_PC_GUI:
+        pu16Regs = pDest->uPcGuiData.u16Regs;
+        u16RegCount = (uint16_t)(sizeof(pDest->uPcGuiData.u16Regs) / sizeof(pDest->uPcGuiData.u16Regs[0]));
+        break;
+    default:
+        return;
     }
+
+    if (u16SourceRegAddr >= u16RegCount)
+    {
+        return;
+    }
+
+    pu16Regs[u16SourceRegAddr] = u16Value;
 }
