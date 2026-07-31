@@ -109,6 +109,13 @@ void delayMicroseconds(uint32_t us);
 
 #define CODESW_SPEED_TEST (0) // 1: 啟用速度模擬測試, 0: 正常讀取霍爾速度
 
+// 油門加速曲線方式：
+//   0 = 原本的 step/time 表 (依油門電壓分 5 段查表)，行為完全不變
+//   1 = 新的「限斜率 + 一階濾波」方式，5 組曲線在程式內選 (ACCEL_FILTER_CURVE_SELECT)
+//       只影響「加速」；減速仍走原本的 step/time 減速表，煞停行為不變
+//   參數表在 s_logic_motor.h 的 ACCEL_FILTER_CURVE_TABLE_INIT，曲線 3 = 原本手感
+#define CODESW_THROTTLE_ACCEL_FILTER_ENABLE (1)
+
 #define CODESW_TEMPERATURE_CONTROLLER_ENABLE (1)  // 啟用舊的、但功能完整的溫度保護邏輯
 #define CODESW_TEMPERATURE_CONTROLLER_TEST (0)
 

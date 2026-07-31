@@ -1852,6 +1852,10 @@ void DoControl(void) {
             } else {
                 g_stSystemData.i16TargetRpm = (int16_t)u16lTargetRpm;
             }
+#if CODESW_X2C_SCOPE_ENABLE == 1
+            // 斜坡/濾波「前」的取樣點：油門直接算出的目標命令(轉油門時為階躍)
+            g_i16ScopeCmdTarget = g_stSystemData.i16TargetRpm;
+#endif
 
             // 處理油門控制結果
             if (i8ThrottleResult == 0)  // 成功
@@ -1877,6 +1881,25 @@ void DoControl(void) {
                 // 更新馬達最後要執行的轉速
                 // 注意：此處呼叫舊的無正負號函式，因此傳入 abs() 值並強制轉型指標
 
+#if CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1
+                // 新加速方式：限斜率 + 一階濾波。曲線在程式內選定 (ACCEL_FILTER_CURVE_SELECT)，
+                //   與原本的 step/time 曲線一樣不吃外部參數。
+                //   只影響加速；目標為 0 或需減速時，函式內部會轉回原本的 step/time 減速表。
+#if ACCEL_FILTER_CURVE_FROM_MODBUS == 1
+                uint8_t u8lAccelCurveIndex = (uint8_t)g_stSystemData.sSharedData.eAccelCurve;
+#else
+                uint8_t u8lAccelCurveIndex = ACCEL_FILTER_CURVE_INDEX_DEFAULT;
+#endif
+                i8MotorResult = logic_motor_getUpdateParamsFiltered(
+                        &u16MotorActiveRpm,
+                        g_stSystemData.u32TimeMs,
+                        u16lCurrentRpm,
+                        u16lTargetRpm,
+                        u16lThrottleOutputMax,  // 最大轉速限制 (段位決定)
+                        u16lThrottleOutputMin,  // 最小轉速限制
+                        &g_stSystemData.sStepTime,
+                        u8lAccelCurveIndex);
+#else
                 i8MotorResult = logic_motor_getUpdateParams(&u16MotorActiveRpm,
                                                             g_stSystemData.u32TimeMs,
                                                             u16lCurrentRpm,
@@ -1884,12 +1907,17 @@ void DoControl(void) {
                                                             u16lThrottleOutputMax,  // 最大轉速限制
                                                             u16lThrottleOutputMin,  // 最小轉速限制
                                                             &g_stSystemData.sStepTime);
+#endif
 
                 if (i8MotorResult == 0)  // 馬達控制成功
                 {
                     // 更新當前轉速
                     g_stSystemData.i16CurrentRpm = (int16_t)u16MotorActiveRpm;
                     g_stSystemData.i16ActiveRpm = (int16_t)u16MotorActiveRpm;
+#if CODESW_X2C_SCOPE_ENABLE == 1
+                    // 斜坡/濾波「後」的取樣點：實際送往速度環的命令
+                    g_i16ScopeCmdOut = (int16_t)u16MotorActiveRpm;
+#endif
                 }
                 }
             }

@@ -32,7 +32,7 @@ typedef enum {
 } E_LOGIC_THROTTLE_DIRECTION_T;
 
 // --- 正轉油門電壓與輸出對應關係 ---
-#define LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV (800u)  // 正轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
+#define LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV (1200u)  // 正轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
 #define LOGIC_THROTTLE_FWD_VOLTAGE_MAX_MV (4800u)  // 正轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
 #define LOGIC_THROTTLE_FWD_OUTPUT_ZERO (0u)                  // 正轉電壓低於 MIN 時的目標輸出
@@ -40,7 +40,7 @@ typedef enum {
 #define LOGIC_THROTTLE_FWD_OUTPUT_MAX RPMX10_TO_CMD(43945)   // 4394.5 RPM = 8.29 km/h (= 舊值 12000)
 
 // --- 反轉油門電壓與輸出對應關係 ---
-#define LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV (800u)  // 反轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
+#define LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV (1200u)  // 反轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
 #define LOGIC_THROTTLE_REV_VOLTAGE_MAX_MV (4800u)  // 反轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
 #define LOGIC_THROTTLE_REV_OUTPUT_ZERO (0u)                 // 反轉電壓低於 MIN 時的目標輸出
@@ -48,7 +48,15 @@ typedef enum {
 #define LOGIC_THROTTLE_REV_OUTPUT_MAX RPMX10_TO_CMD(14648)  // 1464.8 RPM = 2.76 km/h (= 舊值 4000)
 
 // 開機安全檢查
-#define LOGIC_THROTTLE_POWER_ON_CHECK_MV (1000u)  // 開機檢測電壓閾值，油門電壓需低於此值才視為安全/已釋放
+// 「已釋放」的定義必須與「會出力」的門檻一致，否則會出現「不出力但永久抑制」的死角：
+//   例如門檻 1200mV 而此值仍為舊的 1000mV 時，歸位電壓 1100mV 的油門輸出為 0(在死區內)，
+//   卻永遠滿足抑制條件(>1000)而解不開。因此此值由起步門檻自動推導，取正反轉較嚴格(較低)者。
+// 判定用 >= (見 s_logic_throttle.c)：電壓「剛好等於」起步門檻時已會輸出 OUTPUT_MIN，
+//   必須算成未釋放，否則開機瞬間就會以 1.04 km/h 潛行。
+#define LOGIC_THROTTLE_POWER_ON_CHECK_MV                                        \
+    ((LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV < LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV)    \
+             ? LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV                                \
+             : LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV)  // 目前 = 1200mV
 
 // 運行時故障檢測電壓閾值
 #define LOGIC_THROTTLE_FAULT_VOLTAGE_LOW_MV (0u)     //300 油門信號電壓過低故障閾值 (mV), e.g., open circuit
@@ -57,6 +65,10 @@ typedef enum {
 
 // --- 正轉加速/減速 Step/Time 表格 ---
 // 加速段 (電壓上升)
+// [待確認，暫不動] 起步門檻改為 1200mV 後，V1 恰好等於起步門檻，第 0 段(最緩的起步
+//   加速 {2,1})只有在電壓恰為 1200mV 時才會命中，實務上輕踩起步會直接落到第 1 段
+//   {3,2}。若要恢復最緩起步段需把 V1~V4 往上搬(等比例為 1560/2370/3180/3990，
+//   即維持輸出佔比 10%/32.5%/55%/77.5%)，但那會改變騎乘感，故保留原值待實車確認。
 #define LOGIC_THROTTLE_FWD_ACCEL_V1_MV (1200u)
 #define LOGIC_THROTTLE_FWD_ACCEL_V2_MV (2100u)
 #define LOGIC_THROTTLE_FWD_ACCEL_V3_MV (3000u)

@@ -119,7 +119,8 @@ static S_MOTOR_STEP_TIME_T _throttleGetStepTimeParams(uint16_t u16TargetRpm,
 }
 
 int8_t logic_throttle_initAndCheck(uint16_t u16InitialVoltageMv) {
-    sb_throttle_isPowerOnInhibited = (u16InitialVoltageMv > LOGIC_THROTTLE_POWER_ON_CHECK_MV);
+    // >= 而非 > ：電壓剛好等於起步門檻時已會輸出 OUTPUT_MIN，必須算成「未釋放」
+    sb_throttle_isPowerOnInhibited = (u16InitialVoltageMv >= LOGIC_THROTTLE_POWER_ON_CHECK_MV);
 
     if (sb_throttle_isPowerOnInhibited) {
         logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A03_THROTTLE_FAULT, true);
@@ -159,7 +160,7 @@ int8_t logic_throttle_getUpdateParams(S_MOTOR_STEP_TIME_T *psStepTime,
 
     // 檢查開機抑制狀態
     if (sb_throttle_isPowerOnInhibited) {
-        if (u16CurrentVoltageMv <= LOGIC_THROTTLE_POWER_ON_CHECK_MV) {
+        if (u16CurrentVoltageMv < LOGIC_THROTTLE_POWER_ON_CHECK_MV) {  // 與上面的 >= 對稱
             logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A03_THROTTLE_FAULT, false);
             sb_throttle_isPowerOnInhibited = false;
         } else {

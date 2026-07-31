@@ -11,6 +11,13 @@
 static uint32_t su32_motor_lastSystemTimeMs = 0;
 static S_LOGIC_MOTOR_CONFIG_T s_currentMotorConfig;
 
+#if CODESW_X2C_SCOPE_ENABLE == 1
+// X2CScope 觀測用 (宣告與說明見 s_logic_motor.h)。純觀測，不參與任何控制決策。
+int16_t g_i16ScopeCmdTarget = 0;
+int16_t g_i16ScopeCmdRateLim = 0;
+int16_t g_i16ScopeCmdOut = 0;
+#endif
+
 // --- Merged Configuration Functions ---
 
 /**
@@ -328,6 +335,131 @@ int8_t logic_motor_getUpdateParams(uint16_t* pu16ActiveRpm,
     *pu16ActiveRpm = u16ActiveRpm;
     return 0;
 }
+
+#if CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1
+// ---------------------------------------------------------------------------
+//  限斜率 + 一階濾波 的加速曲線 (設計說明見 s_logic_motor.h)
+// ---------------------------------------------------------------------------
+static const S_ACCEL_FILTER_CURVE_T scsAccelFilterCurves[ACCEL_FILTER_CURVE_COUNT] =
+    ACCEL_FILTER_CURVE_TABLE_INIT;
+
+static uint16_t su16AccelFilterRateLimited = 0;  // 限斜率後的目標 (count)
+static uint32_t su32AccelFilterState = 0;        // 濾波狀態 (count << FRAC_BITS)
+static uint32_t su32AccelFilterLastMs = 0;
+static bool sbAccelFilterPrimed = false;         // 是否已預載起始速度
+
+// 濾波狀態 → 命令 count。必須四捨五入而非截尾：一階濾波是漸近的，尾段會停在
+//   「目標 − 不到 1 count」的位置，截尾會讓命令永遠差 1 count 到不了目標(實測 11999/12000)。
+#define ACCEL_FILTER_STATE_TO_CMD(st) \
+    ((uint16_t)(((st) + (1UL << (ACCEL_FILTER_FRAC_BITS - 1u))) >> ACCEL_FILTER_FRAC_BITS))
+
+int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
+                                           uint32_t u32SystemTimeMs,
+                                           uint16_t u16CurrentRpm,
+                                           uint16_t u16TargetRpm,
+                                           uint16_t u16MaxRpm,
+                                           uint16_t u16MinRpm,
+                                           S_MOTOR_STEP_TIME_T *psStepTime,
+                                           uint8_t u8CurveIndex) {
+    if (pu16ActiveRpm == NULL || psStepTime == NULL) {
+        return -1;
+    }
+    if (u8CurveIndex >= ACCEL_FILTER_CURVE_COUNT) {
+        u8CurveIndex = ACCEL_FILTER_CURVE_COUNT - 1u;
+    }
+    const S_ACCEL_FILTER_CURVE_T *pcsCurve = &scsAccelFilterCurves[u8CurveIndex];
+
+    // 目標為 0 (放油門) 或需要減速時，交回原本的 step/time 減速表處理，
+    //   同時把濾波狀態解除預載，下次起步才會重新預載起始速度。
+    if ((u16TargetRpm == 0u) || (u16TargetRpm < u16CurrentRpm)) {
+        sbAccelFilterPrimed = false;
+        su16AccelFilterRateLimited = u16CurrentRpm;  // 跟著實際命令走，下次起步不會留下舊值
+#if CODESW_X2C_SCOPE_ENABLE == 1
+        g_i16ScopeCmdRateLim = (int16_t)u16CurrentRpm;
+#endif
+        return logic_motor_getUpdateParams(pu16ActiveRpm, u32SystemTimeMs, u16CurrentRpm,
+                                           u16TargetRpm, u16MaxRpm, u16MinRpm, psStepTime);
+    }
+
+    // 命令若被外部強制改寫(例如失速保護歸零、其他模式接手)，重新同步內部狀態，
+    //   否則濾波會從舊值繼續，命令會跳動。
+    uint16_t u16StateCmd = ACCEL_FILTER_STATE_TO_CMD(su32AccelFilterState);
+    uint16_t u16Diff = (u16StateCmd > u16CurrentRpm) ? (uint16_t)(u16StateCmd - u16CurrentRpm)
+                                                     : (uint16_t)(u16CurrentRpm - u16StateCmd);
+    if (!sbAccelFilterPrimed || (u16Diff > ACCEL_FILTER_RESYNC_TOL)) {
+        // 起步預載：直接跳到起始速度，省掉從 0 慢慢爬的那段 (原本要 750ms)
+        uint16_t u16Seed = u16CurrentRpm;
+        if (u16Seed < pcsCurve->u16StartCmd) {
+            u16Seed = pcsCurve->u16StartCmd;
+        }
+        if (u16Seed < u16MinRpm) {
+            u16Seed = u16MinRpm;
+        }
+        if (u16Seed > u16MaxRpm) {
+            u16Seed = u16MaxRpm;
+        }
+        su16AccelFilterRateLimited = u16Seed;
+        su32AccelFilterState = (uint32_t)u16Seed << ACCEL_FILTER_FRAC_BITS;
+        su32AccelFilterLastMs = u32SystemTimeMs;
+        sbAccelFilterPrimed = true;
+#if CODESW_X2C_SCOPE_ENABLE == 1
+        g_i16ScopeCmdRateLim = (int16_t)u16Seed;  // 起步預載，避免留下上一次的舊值
+#endif
+        *pu16ActiveRpm = u16Seed;
+        return 0;
+    }
+
+    // 依經過時間補算 tick；主迴圈延遲時最多補 ACCEL_FILTER_CATCHUP_MAX 個，避免無界迴圈
+    uint32_t u32Elapsed = u32SystemTimeMs - su32AccelFilterLastMs;
+    if (u32Elapsed < ACCEL_FILTER_TICK_MS) {
+        return -1;  // 時間未到
+    }
+    uint32_t u32Ticks = u32Elapsed / ACCEL_FILTER_TICK_MS;
+    if (u32Ticks > ACCEL_FILTER_CATCHUP_MAX) {
+        u32Ticks = ACCEL_FILTER_CATCHUP_MAX;
+    }
+    su32AccelFilterLastMs += u32Ticks * ACCEL_FILTER_TICK_MS;
+
+    uint16_t u16Target = (u16TargetRpm > u16MaxRpm) ? u16MaxRpm : u16TargetRpm;
+
+    for (uint32_t u32i = 0; u32i < u32Ticks; ++u32i) {
+        // 第一級：限斜率 (決定到達時間)
+        // ⚠ 必須先比大小再相減：u16Target 與 su16AccelFilterRateLimited 都是 unsigned，
+        //   目標只要比目前值低 1 count(油門 ADC 雜訊就足夠)，相減會下溢成 65535，
+        //   於是限斜率每 tick 都以為「還差很遠」而繼續加，一路衝過目標且不會自己回來
+        //   (實測 300 tick 後從 12000 爬到 14408，靠重同步才被拉回，波形上是往上的三角尖峰)。
+        if (su16AccelFilterRateLimited > u16Target) {
+            su16AccelFilterRateLimited = u16Target;  // 目標下修時直接跟上，不往下慢慢走
+        }
+        uint16_t u16Room = (uint16_t)(u16Target - su16AccelFilterRateLimited);
+        su16AccelFilterRateLimited += (u16Room > pcsCurve->u8RateCountsPerTick)
+                                              ? pcsCurve->u8RateCountsPerTick
+                                              : u16Room;
+        // 第二級：一階低通 (磨圓折角)。帶小數位元，故不會在小誤差時卡住。
+        uint32_t u32TargetShifted = (uint32_t)su16AccelFilterRateLimited << ACCEL_FILTER_FRAC_BITS;
+        if (u32TargetShifted >= su32AccelFilterState) {
+            su32AccelFilterState +=
+                (u32TargetShifted - su32AccelFilterState) >> pcsCurve->u8FilterShift;
+        } else {
+            su32AccelFilterState -=
+                (su32AccelFilterState - u32TargetShifted) >> pcsCurve->u8FilterShift;
+        }
+    }
+
+    uint16_t u16Out = ACCEL_FILTER_STATE_TO_CMD(su32AccelFilterState);
+    if (u16Out < u16MinRpm) {
+        u16Out = u16MinRpm;
+    }
+    if (u16Out > u16MaxRpm) {
+        u16Out = u16MaxRpm;
+    }
+#if CODESW_X2C_SCOPE_ENABLE == 1
+    g_i16ScopeCmdRateLim = (int16_t)su16AccelFilterRateLimited;  // 限斜率後、濾波前
+#endif
+    *pu16ActiveRpm = u16Out;
+    return 0;
+}
+#endif  // CODESW_THROTTLE_ACCEL_FILTER_ENABLE
 
 /**
  * @brief (Signed RPM Model) 根據步進參數更新馬達轉速，實現平滑加減速

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "codeSw.h"          // CODESW_THROTTLE_ACCEL_FILTER_ENABLE
 #include "../motor_scale.h"  // MOTOR_POLE_PAIRS / SPEED_FS_RPM / GEAR_RATIO_X100
 
 // --- Merged from s_logic_motor_config.h ---
@@ -54,6 +55,88 @@ typedef struct
     int8_t i8Step;  // 步進大小 (正值為加速，負值為減速)
     int8_t i8Time;  // 時間間隔 (毫秒)
 } S_MOTOR_STEP_TIME_T;
+
+// ============================================================================
+//  加速濾波曲線 (CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1 時生效)
+// ============================================================================
+//  結構：目標 → [限斜率 R] → [一階低通 τ] → 速度命令
+//    限斜率決定「到達時間」，濾波只把折角磨圓(消掉起步/到達/換段的階躍)。
+//    純一階濾波不能單獨用：它的加速率與剩餘誤差成正比 → 起步最猛、尾段最慢，
+//    要把起步猛度壓到現行水準 (1.38 km/h/s) 需 τ≈4.1s，到達時間會變 19s。
+//    加上限斜率後，到達時間與原本線性斜坡幾乎相同 (5.20s → 5.65s)，但無階躍。
+//
+//  ⚠ 只作用於「加速」。減速仍走原本的 step/time 減速表(-25~-40 counts/ms)，
+//    煞停行為完全不變 —— 若讓濾波接手減速會慢 10 倍以上，屬安全風險。
+//
+//  單位：命令 count (1 count = 0.366 機械 RPM = 0.00069 km/h)，見 s_logic_throttle.h 檔頭。
+// ============================================================================
+#define ACCEL_FILTER_TICK_MS 2u      // 斜坡/濾波的更新週期
+#define ACCEL_FILTER_FRAC_BITS 10u   // 濾波狀態的小數位元數
+                                     //   ⚠ 必要：天真的 `cmd += (target-cmd)>>K` 在誤差
+                                     //   小於 2^K 時位移結果為 0 會永久卡住 (K=9 實測停在
+                                     //   距目標 511 counts = 0.35 km/h 處)。帶小數位元後殘差 <1 count。
+#define ACCEL_FILTER_CATCHUP_MAX 8u  // 主迴圈延遲時最多補算幾個 tick (避免無界迴圈)
+#define ACCEL_FILTER_RESYNC_TOL 64u  // 命令被外部強制改寫(如失速保護歸零)時的重同步門檻
+
+#if CODESW_X2C_SCOPE_ENABLE == 1
+// ---------------------------------------------------------------------------
+//  X2CScope 觀測：速度命令在斜坡/濾波「前 / 中 / 後」三個取樣點
+//  單位皆為 Q15 速度命令 count (1 count = 0.366 機械 RPM = 0.00069 km/h)
+//    g_i16ScopeCmdTarget  油門算出的目標，未經任何斜坡 → 轉油門時是階躍
+//    g_i16ScopeCmdRateLim 限斜率後、一階濾波前 (只有新加速方式會更新；舊方式維持 0)
+//    g_i16ScopeCmdOut     實際送往速度環的命令 (= i16ActiveRpm)
+//  兩種加速方式都會更新 Target / Out，可直接 A/B 對照。
+//  X2CScope 的取樣點在 ADC ISR (50us) 內，遠快於曲線 τ=0.26s，波形足夠清楚。
+// ---------------------------------------------------------------------------
+extern int16_t g_i16ScopeCmdTarget;
+extern int16_t g_i16ScopeCmdRateLim;
+extern int16_t g_i16ScopeCmdOut;
+#endif
+
+typedef struct
+{
+    uint8_t u8RateCountsPerTick;  // 限斜率：每 tick 增加的命令 count
+    uint8_t u8FilterShift;        // K：時間常數 τ = 2^K x ACCEL_FILTER_TICK_MS
+    uint16_t u16StartCmd;         // 起始速度 (命令 count)；加速起步時直接預載，不用爬上去
+} S_ACCEL_FILTER_CURVE_T;
+
+#define ACCEL_FILTER_CURVE_COUNT 5u
+
+// --- 曲線選擇 ---
+// 原本的 step/time 曲線是「純程式內設定」：門檻與 {Step,Time} 全是 #define，
+//   執行時只依油門電壓/當前輸出/方向查表，與 Modbus 或 EEPROM 完全無關。
+//   新曲線沿用同一原則 —— 預設在程式內選定，不吃外部參數。
+// 註：協定裡的 eAccelCurve (ID02/ID03 reg 0x09)、u8AccelMs_Ax1~Ax5 (reg 0x0F~0x11) 與
+//   EEPROM 的 u8AccelCurveGroup 目前都只被解碼/回寫，沒有任何控制邏輯讀取，
+//   且其語意未經實機驗證(LCD 送 0 就會落到最緩的曲線 1)，故預設不使用。
+#define ACCEL_FILTER_CURVE_SELECT (3u)  // 1~5，預設 3 = 與原本 step/time 同手感
+
+// 1 = 改由 Modbus 的 eAccelCurve 選 (A0 = 第 1 組)；0 = 用上面的 ACCEL_FILTER_CURVE_SELECT
+#define ACCEL_FILTER_CURVE_FROM_MODBUS (0)
+
+#define ACCEL_FILTER_CURVE_INDEX_DEFAULT ((uint8_t)((ACCEL_FILTER_CURVE_SELECT) - 1u))
+
+#if ((ACCEL_FILTER_CURVE_SELECT) < 1u) || ((ACCEL_FILTER_CURVE_SELECT) > ACCEL_FILTER_CURVE_COUNT)
+#error "ACCEL_FILTER_CURVE_SELECT 必須是 1~5"
+#endif
+
+// 起始速度預設值 = 原本的 OUTPUT_MIN (549.3 RPM = 1.04 km/h)
+#define ACCEL_FILTER_START_CMD_DEFAULT RPMX10_TO_CMD(5493)
+
+// 曲線索引 0~4 對應曲線 1~5 (eAccelCurve A0 = 第 1 組)。
+// R (counts/tick, tick=2ms) → 加速率 / 由起始速度到 8.29 km/h 的到達時間：
+//   曲線1  R=2  0.69 km/h/s  10.7s      曲線4  R=6  2.07 km/h/s  4.0s
+//   曲線2  R=3  1.04 km/h/s   7.3s      曲線5  R=8  2.76 km/h/s  3.2s
+//   曲線3  R=4  1.38 km/h/s   5.7s  ← 與原本 step/time 的 ENTRY_0 {2,1} 同手感
+// K 全部用 7 (τ=0.26s)：折角磨圓但不明顯延遲；要更軟可個別加大。
+#define ACCEL_FILTER_CURVE_TABLE_INIT                                          \
+    {                                                                          \
+        {2, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 1 最緩 */               \
+        {3, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 2 */                    \
+        {4, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 3 = 原本手感 */         \
+        {6, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 4 */                    \
+        {8, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 5 最快 */               \
+    }
 
 // --- Merged Function Prototypes ---
 
@@ -209,6 +292,29 @@ int8_t logic_motor_getUpdateParams(uint16_t *pu16ActiveRpm,
                                    uint16_t u16MaxRpm,
                                    uint16_t u16MinRpm,
                                    S_MOTOR_STEP_TIME_T *psStepTime);
+
+#if CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1
+/**
+ * @brief 以「限斜率 + 一階濾波」更新馬達速度命令 (加速)；減速沿用 step/time 表
+ * @param pu16ActiveRpm    指向實際速度命令的指標 (輸出)
+ * @param u32SystemTimeMs  系統時間戳記 (毫秒)
+ * @param u16CurrentRpm    當前速度命令
+ * @param u16TargetRpm     目標速度命令
+ * @param u16MaxRpm        上限 (段位決定的最高速)
+ * @param u16MinRpm        下限
+ * @param psStepTime       step/time 參數；僅在「減速」時使用
+ * @param u8CurveIndex     曲線索引 0~4 (對應曲線 1~5)，超出範圍自動夾住
+ * @return 0: 成功, -1: 時間未到或指標無效, -2: 時間參數無效(減速時), -3: 無需調整
+ */
+int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
+                                           uint32_t u32SystemTimeMs,
+                                           uint16_t u16CurrentRpm,
+                                           uint16_t u16TargetRpm,
+                                           uint16_t u16MaxRpm,
+                                           uint16_t u16MinRpm,
+                                           S_MOTOR_STEP_TIME_T *psStepTime,
+                                           uint8_t u8CurveIndex);
+#endif
 
 /**
  * @brief 將霍爾脈衝計數轉換為真實的 RPM 值
