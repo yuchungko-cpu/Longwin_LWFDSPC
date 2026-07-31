@@ -93,7 +93,28 @@
 #define DDEADTIME               (uint16_t)(DEADTIME_MICROSEC*FOSC_MHZ)
 // loop time in terms of PWM clock period
 #define LOOPTIME_TCY            (uint16_t)(((LOOPTIME_MICROSEC*FOSC_MHZ)/2)-1)
-#define HALF_PWMDUTY            (signed int)(LOOPTIME_TCY + 1)/2;
+// [FIX] 原定義為 `(signed int)(LOOPTIME_TCY + 1)/2;` —— 帶拖尾分號且缺外層括號。
+//   只有在「敘述結尾」位置才能用(展開成 ;; 無害)，一放進表達式就會壞：
+//   `if (x > HALF_PWMDUTY)` → 語法錯誤；`a / HALF_PWMDUTY` → 優先序變成 (a/(TCY+1))/2。
+//   展開值不變(仍為 2500)，純粹是巨集衛生修正。
+#define HALF_PWMDUTY            ((signed int)((LOOPTIME_TCY + 1) / 2))
+
+// DC bus 電流正規化增益 (Q11)。IbusCalc() 用 __builtin_mpy + __builtin_sacr(-4)，
+//   等效增益 = K × 16 / 32768 = 32768 / LOOPTIME_TCY。
+//   [FIX] 原本硬寫 26843 = 32768/2500，把 duty 偏移量除以「半週期」而非「週期」，
+//   使 Ibus 為真實母線電流的 2 倍。正確分母是 MPER (= LOOPTIME_TCY = 4999) → 13424。
+#define IBUS_NORM_Q11           ((signed int)((32768UL * 2048UL) / LOOPTIME_TCY))
+
+// 死區時間造成的母線電流偏差補償 (Q15)。互補 PWM 在死區期間節點被回流二極體夾到某一軌，
+//   有效工作比變成 dᵢ − δ·sign(iᵢ)(δ = 死區/PWM 週期) → Ibus_真實 = Σdᵢiᵢ − δ·Σ|iᵢ|。
+//   這是單向偏差(與運轉象限無關，死區期間電流一律被導向回充方向)，用暫存器 duty 算出來的
+//   Ibus 恆偏高，靠 Σiᵢ=0 消不掉。
+//   δ 的值取決於 dead-time 暫存器的時鐘：PG1DTL/PG1DTH = DDEADTIME = 200 counts，
+//     若與 duty 共用 PWM 時鐘 (10ns/count) → 死區 2.0us → δ = 200/4999 = 4.0% → Q15 1311
+//     若 dead-time 走 FOSC (5ns/count)     → 死區 1.0us → δ = 2.0%          → Q15  655
+//   FRM 尚未核對，故 ⚠ 預設 0 = 不補償(行為與加入本功能前完全相同)。
+//   上機用鉤錶量母線電流、與上報值比對後再填入實測值。
+#define IBUS_DEADTIME_COMP_Q15  0
 /* Specify ADC Triggering Point w.r.t PWM Output for sensing Motor Currents */
 #define ADC_SAMPLING_POINT      0x0000
 

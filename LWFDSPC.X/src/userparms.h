@@ -123,10 +123,46 @@ extern "C" {
 #define NORM_CURRENT(current_real) (Q15(current_real / NORM_CURRENT_CONST / 32768))
 
 #define R_SHUNT_Ohm (float)0.002
-#define CURRENT_GAIN_OPAMP (float)12.2
+#define CURRENT_GAIN_OPAMP (float)7.89  // 實測放大倍率 (原記載 12.2 有誤)
 // #define RATED_AMPS (float)10.0
 // #define RATED_CURRENT_Q15   RATED_AMPS*R_SHUNT_Ohm*CURRENT_GAIN_OPAMP*32768*2/3.3
 #define RATED_CURRENT_Q15 Q15(0.5)  // Half of the maximal peak current
+
+// *****************************************************************************
+//  相電流 Q15 <-> 安培 換算 (單一來源，改硬體參數即自動跟著變)
+// *****************************************************************************
+//  量測鏈：分流電阻 → 運放 → ADC (12-bit, FORM=1 左對齊) → MeasCompCurr()
+//    零電流時運放輸出 = VREF/2 = 1.65V (雙極性)。
+//
+//  [FIX 2026-07-31] MeasCompCurr() 的淨增益是 1.0，不是 KCURRA (=0.5)。
+//    meascurr.s 的組語是 `mpy w4*w5,A` 之後 `sac A,#-1,w4` —— sac 的負位移量是「左移」，
+//    #-1 就是再乘 2，該檔自己的註解也寫著 `qIa = 2 * qKa * CorrADC1`。
+//    Microchip 原本就是設計成用 KCURRA = Q15(0.5) 去抵掉組語裡的 x2，讓淨增益為 1.0，
+//    使「感測器軌到軌」剛好對應「Q15 滿刻度」。
+//    本檔原註解把 0.5 又算了一次 → counts/A 少一半 → 回推安培多一倍，
+//    實機上 IbusAmpX10 / Modbus 上報電流是實際值的 2 倍。
+//
+//  counts/A = (R_SHUNT x GAIN / VREF) x ADC滿刻度counts x (2 x KCURRA)
+//           = (0.002 x 7.89 / 3.3) x 65520 x 1.0 = 313.3      (1 count = 3.2 mA)
+//  → Q15 滿刻度 32768 ↔ 104.6 A，而這正好等於感測器物理極限 ±1.65V/0.01578 = ±104.6 A
+//    (兩者一致是這組數字正確的自我驗證：軌到軌 = 滿刻度)
+#define ADC_FULL_SCALE_COUNTS 65520UL  // 12-bit 左對齊 (0xFFF0)
+#define ADC_VREF_V (float)3.3
+
+// MeasCompCurr() 的淨增益 = 2 x KCURRA (組語 sac #-1 的 x2)。目前 = 1.0
+#define MEASCURR_NET_GAIN ((2.0f * (float)KCURRA) / 32768.0f)
+
+// counts/A x 100 (整數化，供下方換算用)。目前 = 31330
+#define IABC_COUNTS_PER_AMP_X100                                                   \
+    ((uint32_t)((R_SHUNT_Ohm * CURRENT_GAIN_OPAMP * MEASCURR_NET_GAIN * 100.0f *     \
+                 (float)ADC_FULL_SCALE_COUNTS) /                                    \
+                ADC_VREF_V))
+
+// Q15 電流 counts -> 0.1 A (四捨五入)。輸入須為非負，最大 32767 時輸出 1046 (104.6A)。
+// 溢位界限：32767 x 1000 = 3.3e7 < UINT32_MAX，安全。
+#define IABC_Q15_TO_A_X10(q15)                                                     \
+    ((uint16_t)(((uint32_t)(q15) * 1000UL + IABC_COUNTS_PER_AMP_X100 / 2) /         \
+                IABC_COUNTS_PER_AMP_X100))
 /* Open loop q current setup - */
 #define Q_CURRENT_REF_OPENLOOP NORM_CURRENT(0.1008)  //@6kph
 

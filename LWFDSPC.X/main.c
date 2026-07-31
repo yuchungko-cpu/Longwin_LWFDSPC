@@ -240,14 +240,27 @@ signed int HallPulsesLatch = 0;
 unsigned int HallPulsesCntr = 0;
 const int16_t PhaseValues[8] = {0, 0, -21844, -10922, 21844, 10922, 32767, 0};
 signed int TempVar;     // main loop
-signed int TempVar16;   // interrupt
-signed int Temp2Var16;  // interrupt
-signed long TempVar32;  // interrupt
-signed int Ibus = 0;
+signed int Ibus = 0;     // 瞬時 DC bus 電流 (Q15，與 iabc 同刻度；313.3 counts/A)
+// 快速 IIR 平均 (τ=6.4ms)，供 X2CScope 觀測動態；上報一律用下面的 IbusMeanQ15。
+// 內部狀態多帶 IBUS_AVG_FRAC_BITS 個小數位元，因此沒有舊版 Q15 乘法實作的小訊號凍結
+// 死區(舊版 |IbusAVG| < 50 時衰減項與輸入項雙雙捨為 0)。純位移，不用累加器。
+// 狀態上界 = 32767 << 8 = 8.4e6，int32 安全。
 signed int IbusAVG = 0;
-signed int V_PhaseA = 0;
-signed int V_PhaseB = 0;
-signed int V_PhaseC = 0;
+#define IBUS_AVG_FRAC_BITS 8  // 內部小數位元數
+#define IBUS_IIR_SHIFT     7  // τ = 2^7 = 128 取樣 x 50us = 6.4ms
+static int32_t s_i32IbusAvgAcc = 0;
+// 上報用的精確平均：ISR 累加 IBUS_AVG_SAMPLES 筆後取平均寫入 IbusMeanQ15。
+// 用 2 的幕次讓除法變成位移；IbusMeanQ15 是單一 16-bit 全域，主迴圈可原子讀取，
+// 不需要關中斷或臨界區。
+#define IBUS_AVG_SAMPLES 512  // 512 x 50us = 25.6ms 平均窗
+#define IBUS_AVG_SHIFT 9      // log2(IBUS_AVG_SAMPLES)
+signed int IbusMeanQ15 = 0;   // 過去 25.6ms 的 DC bus 電流平均 (Q15，帶正負號)
+// IbusMeanQ15 的安培表示 (單位 0.1 A，帶正負號：回充為負)，僅供 X2CScope 觀測，
+// 免得在 scope 上心算 ÷313.3。上限 1046 (=104.6A)，int16 內安全。
+// 在主迴圈換算(見 Modbus 上報處)，不在 ISR 裡做 32-bit 除法。
+signed int IbusAmpX10 = 0;
+static int32_t s_i32IbusAccum = 0;   // 累加器，最大 512 x 32767 = 1.7e7，int32 安全
+static uint16_t s_u16IbusSamples = 0;
 int32_t FilteredSpeed;  // Used for display
 // int32_t FilteredHallPeriod;
 
@@ -348,7 +361,6 @@ void OvervoltageDetect(void);
 extern signed int FracMpy(signed int mul_1, signed int mul_2);
 void IqSquareIntegral(void);
 void IbusCalc(void);
-void IbusCalc2(void);
 
 // Modbus 排程器相關函式宣告
 #if CODESW_MODBUS_SCHEDULER_ENABLE == 1
@@ -563,11 +575,20 @@ int main(void) {
     // measCurrParm.Offsetb = 192;
     // HAL_MC1PhaseStateChangeMaxPeriodSet(PERIOD_CONSTANT);
 
-    CORCONbits.SATA = 1;
-    CORCONbits.SATB = 1;
-    CORCONbits.ACCSAT = 1;
-
-    CORCONbits.SATA = 0;
+    // DSP 累加器飽和設定。影響範圍：main.c 內直接使用 a_Reg / __builtin_mpy / __builtin_sacr
+    //   的程式，以及 SpeedCalc.s 的 FracMpy。motor_control 函式庫的組語函式會在進入時自行
+    //   覆寫 CORCON、離開時還原，故不受此處設定影響。
+    CORCONbits.SATA = 1;    // ACCA 飽和
+    CORCONbits.SATB = 1;    // ACCB 飽和
+    CORCONbits.SATDW = 1;   // 存回資料空間時飽和：sac/sacr 寫入 16-bit 變數時「夾住」而非繞回
+                            //   (SATA 只管 MAC 運算對 40-bit 累加器本身的飽和)。
+    CORCONbits.ACCSAT = 1;  // 9.31 飽和模式：保留 8 個 guard bits，中間和不會被提早夾在 ±1.0
+    // [FIX] 原本此處第 4 行是 `CORCONbits.SATA = 0;`，把前一行剛開啟的 ACCA 飽和又關掉
+    //   (明顯是遺留的除錯痕跡)。已逐條審過 main.c 全部直接累加器運算：
+    //   IbusCalc() 改寫後每個 sacr 的結果都有 int16 餘量(duty 偏移 ≤ 16387、每相貢獻 ≤ 16387)，
+    //   三相加總改在 int32 內做並顯式夾制，故不再依賴這裡的設定；其餘運算(過壓監測、
+    //   FracMpy)皆無溢位可能。此處保留飽和設定純粹作為防護網。
+    //   __builtin_divf 與 Q15SQRT 不經累加器，均不受影響。
 
     /* Initialize PI control parameters */
     InitControlParameters();
@@ -1045,6 +1066,39 @@ int main(void) {
             // 轉換為 KM/H * 10 存入共享資料結構。改用四捨五入：舊版直接截斷，
             // 在新的 (更精確的) 換算下 7.19 km/h 會被截成 7.1，與實機顯示不符。
             g_stSystemData.sSharedData.u16CurrentSpeedKmh_x10 = (u16SpeedKmh_x100 + 5) / 10;
+
+            // ------------------------------------------------------------------
+            // DC bus 電流上報 (單位 0.1 A) → ID02 reg 0x04 / ID03 reg 0x05
+            //   來源 IbusMeanQ15 是 ISR 算好的 25.6ms 算術平均，單一 16-bit 全域，
+            //   16-bit MCU 上讀取本身即為原子，無需關中斷。
+            //   換算 313.3 counts/A 由 userparms.h 的 IABC_Q15_TO_A_X10() 依
+            //   R_SHUNT_Ohm / CURRENT_GAIN_OPAMP / KCURRA 推導。
+            //   負值(再生制動時電流回灌)以 0 表示，因上報欄位為 unsigned 的「負載電流」。
+            {
+                signed int i16IbusMean = IbusMeanQ15;  // 原子讀取
+
+                // X2CScope 觀測用：同一個值的安培 x10 表示，保留正負號(回充為負)。
+                //   主迴圈是自由跑的，而 IbusMeanQ15 每 25.6ms 才更新一次，所以只在值
+                //   真的變了才做那次 32-bit 除法。
+                static signed int s_i16LastIbusMean = 1;  // 與合法初值 0 不同 → 開機必算一次
+                if (i16IbusMean != s_i16LastIbusMean) {
+                    s_i16LastIbusMean = i16IbusMean;
+                    if (i16IbusMean >= 0) {
+                        IbusAmpX10 = (signed int)IABC_Q15_TO_A_X10(i16IbusMean);
+                    } else {
+                        // -32768 取負會溢位 → 夾到 32767 (= 104.6A，即感測器軌到軌極限)
+                        signed int i16Mag = (i16IbusMean == -32768)
+                                ? 32767 : (signed int)(-i16IbusMean);
+                        IbusAmpX10 = -(signed int)IABC_Q15_TO_A_X10(i16Mag);
+                    }
+                }
+
+                if (i16IbusMean < 0) {
+                    i16IbusMean = 0;
+                }
+                g_stSystemData.sSharedData.u16LoadCurrentA_x10 =
+                    IABC_Q15_TO_A_X10(i16IbusMean);
+            }
 #else
             // --- [NEW] Safe Speed Simulation ---
             static uint16_t s_u16SimulatedKmh_x10 = 0;
@@ -2316,9 +2370,8 @@ void DoControl(void) {
         iabc.c = measCurrParm.qIb;
         iabc.a = -(iabc.b + iabc.c);
 
-        // Ibus = (long)(abs(iabc.a)+ abs(iabc.b)+abs(iabc.c)) >> 1;
-        //  Calculate qIalpha,qIbeta from qIa,qIb
         IbusCalc();
+        //  Calculate qIalpha,qIbeta from qIa,qIb
         MC_TransformClarke_Assembly(&iabc, &ialphabeta);
 
         // Calculate qId,qIq from qSin,qCos,qIalpha,qIbeta
@@ -2866,49 +2919,94 @@ void DoControl(void) {
         if (IqSquare.Sum < 0)
             IqSquare.Sum = 0;
     }
-    void IbusCalc2(void) {
-        TempVar16 = HALF_PWMDUTY;
-        Temp2Var16 = PG1DC - TempVar16;
-        if (Temp2Var16 >= 0)
-            V_PhaseA = __builtin_divf(Temp2Var16, TempVar16);
-        else
-            V_PhaseA = -__builtin_divf(-Temp2Var16, TempVar16);
+    //=============================================================================
+    // 母線電流量測    Ibus = Σ dᵢ·iᵢ        (dᵢ = PGxDC / MPER，0~1 的工作比)
+    //
+    // 為什麼減 HALF_PWMDUTY：數學上「不減」也完全正確 ——
+    //   Σdᵢiᵢ = Σ(0.5 + (dᵢ−0.5))iᵢ = 0.5·Σiᵢ + Σ(dᵢ−0.5)iᵢ
+    //   而 iabc.a = -(iabc.b + iabc.c) 使 Σiᵢ ≡ 0(整數層面精確，不是近似)，共模項消失，
+    //   兩種寫法給出同一個 Ibus。減它的理由純粹是定點數的實作餘量：
+    //     dᵢ ∈ [0,1] 的 Q15 表示在 dᵢ = 1.0(PGxDC = MPER，即 100% duty)時是 32768，
+    //     放不進 int16 → 會飽和成 32767 而損失增益；
+    //     (dᵢ−0.5) ∈ [−0.5, +0.5] → ±16387，餘量加倍，任何工作點都不會碰到邊界。
+    //   順帶讓每相乘積與答案同數量級(不必用大數相減得小數)，精度略好一點而已
+    //   (整個電氣週期的最大誤差 1.27 vs 1.47 LSB)。
+    //   ⚠ 它對「電流量測共模偏移」沒有任何幫助：Σiᵢ ≡ 0 是由 iabc.a 導出來的，
+    //   兩種寫法對偏移的敏感度完全相同(ε 的係數同為 d_b+d_c−2d_a)。
+    //   註：HALF_PWMDUTY = 2500 而真正的半週期是 4999/2 = 2499.5，差 0.5 count 的誤差
+    //   等於 0.5·Σiᵢ/MPER —— 同樣被 Σiᵢ ≡ 0 消掉，故無影響。
+    //
+    // 相位對應：LONGWIN 硬體把三相接線交換過(見 duty 寫入處)→ PG3=A、PG1=B、PG2=C。
+    // 呼叫時機：必須在本週期新 duty 寫入「之前」，讀到的才是 ADC 取樣期間實際生效的 duty。
+    //
+    // 刻度：Ibus 為 Q15，與 iabc 同刻度(313.3 counts/A，Q15 1.0 ↔ 104.6 A = 感測器軌到軌)。
+    //   物理上界 |Ibus| ≤ max|iᵢ| ≤ 32768，也就是 Q15 滿刻度 —— 極端情況(量測貼軌)會剛好
+    //   踩到 int16 邊界，所以下面的 int32 加總與顯式夾制是必要的，不只是防護網。
+    //=============================================================================
 
-        Temp2Var16 = PG2DC - TempVar16;
-        if (Temp2Var16 >= 0)
-            V_PhaseB = __builtin_divf(Temp2Var16, TempVar16);
-        else
-            V_PhaseB = -__builtin_divf(-Temp2Var16, TempVar16);
-
-        Temp2Var16 = PG3DC - TempVar16;
-        if (Temp2Var16 >= 0)
-            V_PhaseC = __builtin_divf(Temp2Var16, TempVar16);
-        else
-            V_PhaseC = -__builtin_divf(-Temp2Var16, TempVar16);
+    // Δduty(原始計數) → (dᵢ−0.5) 的 Q15 表示。等效乘 32768/MPER = 6.5547；
+    //   sacr(-4) 是左移 4 位(×16)，配合 Q11 常數 → 乘 IBUS_NORM_Q11/2048。
+    //   |2500 × 6.5547| = 16387 < 32767，不會飽和。
+    static inline signed int IbusDutyDevQ15(signed int i16DeltaDuty) {
+        a_Reg = __builtin_mpy(i16DeltaDuty, IBUS_NORM_Q11, 0, 0, 0, 0, 0, 0);
+        return __builtin_sacr(a_Reg, -4);
     }
+
+    static inline signed int IbusFracMpy(signed int i16A, signed int i16B) {
+        a_Reg = __builtin_mpy(i16A, i16B, 0, 0, 0, 0, 0, 0);
+        return __builtin_sacr(a_Reg, 0);
+    }
+
+#if IBUS_DEADTIME_COMP_Q15 != 0
+    // 回傳 int32：iabc.a 在極端量測下可達 -32768，int16 的 -(-32768) 會溢位。
+    static inline int32_t IbusAbs(signed int i16Val) {
+        return (i16Val < 0) ? -(int32_t)i16Val : (int32_t)i16Val;
+    }
+#endif
+
     void IbusCalc(void) {
-        Temp2Var16 = (signed int)PG3DC - HALF_PWMDUTY;
-        a_Reg = __builtin_mpy(Temp2Var16, iabc.a, 0, 0, 0, 0, 0, 0);
-        V_PhaseA = __builtin_sacr(a_Reg, 0);
-        Temp2Var16 = (signed int)PG1DC - HALF_PWMDUTY;
-        a_Reg = __builtin_mpy(Temp2Var16, iabc.b, 0, 0, 0, 0, 0, 0);
-        V_PhaseB = __builtin_sacr(a_Reg, 0);
-        Temp2Var16 = (signed int)PG2DC - HALF_PWMDUTY;
-        a_Reg = __builtin_mpy(Temp2Var16, iabc.c, 0, 0, 0, 0, 0, 0);
-        V_PhaseC = __builtin_sacr(a_Reg, 0);
+        // 先正規化 duty、再乘電流 —— 順序決定精度：
+        //   舊版是「先乘 → 在原始計數刻度捨位 → 最後才 ×6.55」，捨位誤差被放大 6.55 倍
+        //   (每相 ±3.3 LSB，三相最壞 ±10 LSB)；先正規化後每相只剩 ±0.5 LSB。
+        const signed int i16DevA = IbusDutyDevQ15((signed int)PG3DC - HALF_PWMDUTY);
+        const signed int i16DevB = IbusDutyDevQ15((signed int)PG1DC - HALF_PWMDUTY);
+        const signed int i16DevC = IbusDutyDevQ15((signed int)PG2DC - HALF_PWMDUTY);
 
-        TempVar16 = (long)(V_PhaseA + V_PhaseB + V_PhaseC);
-        //
-        // 1/(2500/32768) = 13.1072 = 26843 in Q11
-        // HALF_PWMDUTY: 2500
-        a_Reg = __builtin_mpy(TempVar16, 26843, 0, 0, 0, 0, 0, 0);
-        Ibus = __builtin_sacr(a_Reg, -4);
+        // 每相對母線電流的貢獻，已是 Q15 且與 Ibus 同刻度。
+        // 用 int32 加總：感測器軌到軌 = Q15 滿刻度，所以單相貢獻可達 ±16387、
+        //   三相同號會到 49161 —— int16 的 C 加法會「繞回」變號，故先加寬再夾。
+        int32_t i32Ibus = (int32_t)IbusFracMpy(i16DevA, iabc.a)
+                + (int32_t)IbusFracMpy(i16DevB, iabc.b)
+                + (int32_t)IbusFracMpy(i16DevC, iabc.c);
 
-        a_Reg = __builtin_mpy(IbusAVG, Q15(0.99), 0, 0, 0, 0, 0, 0);
-        IbusAVG = __builtin_sacr(a_Reg, 0);
-        a_Reg = __builtin_mpy(Ibus, Q15(0.01), 0, 0, 0, 0, 0, 0);
-        TempVar16 = __builtin_sacr(a_Reg, 0);
-        IbusAVG += TempVar16;
+#if IBUS_DEADTIME_COMP_Q15 != 0
+        // 死區補償(見 hal/pwm.h 的 IBUS_DEADTIME_COMP_Q15)：Ibus_真實 = Σdᵢiᵢ − δ·Σ|iᵢ|。
+        //   補償量隨電流自然趨於 0，零電流附近不需另設門檻。
+        {
+            const int32_t i32AbsSum = (int32_t)IbusAbs(iabc.a)
+                    + (int32_t)IbusAbs(iabc.b) + (int32_t)IbusAbs(iabc.c);
+            i32Ibus -= (i32AbsSum * IBUS_DEADTIME_COMP_Q15) >> 15;
+        }
+#endif
+        if (i32Ibus > 32767) {
+            i32Ibus = 32767;
+        } else if (i32Ibus < -32768) {
+            i32Ibus = -32768;
+        }
+        Ibus = (signed int)i32Ibus;
+
+        // 上報用的定窗算術平均 (25.6ms) → IbusMeanQ15 → Modbus / IbusAmpX10
+        s_i32IbusAccum += Ibus;
+        if (++s_u16IbusSamples >= IBUS_AVG_SAMPLES) {
+            IbusMeanQ15 = (signed int)(s_i32IbusAccum >> IBUS_AVG_SHIFT);
+            s_i32IbusAccum = 0;
+            s_u16IbusSamples = 0;
+        }
+
+        // 快速 IIR (τ=6.4ms) → IbusAVG，供 X2CScope 觀測動態
+        s_i32IbusAvgAcc += (((int32_t)Ibus << IBUS_AVG_FRAC_BITS) - s_i32IbusAvgAcc)
+                >> IBUS_IIR_SHIFT;
+        IbusAVG = (signed int)(s_i32IbusAvgAcc >> IBUS_AVG_FRAC_BITS);
     }
 
     //=================================================================================================
