@@ -238,6 +238,10 @@ uint16_t TMRLatch = 30000;
 signed int HallPulses = 0;
 signed int HallPulsesLatch = 0;
 unsigned int HallPulsesCntr = 0;
+// [有動力倒溜] 連續「與命令方向相反」的霍爾邊緣數。CNRead_Inline (50us ISR) 累加/清零，
+// 20ms 的 EMB 任務讀取；8-bit 存取在 16-bit MCU 上為原子，不需臨界區。
+// 1 邊緣 = 車輪 1.75 mm，門檻見 userparms.h 的 EMB_ROLLBACK_REV_EDGES。
+volatile uint8_t g_u8EmbRevEdgeCnt = 0;
 const int16_t PhaseValues[8] = {0, 0, -21844, -10922, 21844, 10922, 32767, 0};
 signed int TempVar;     // main loop
 signed int Ibus = 0;     // 瞬時 DC bus 電流 (Q15，與 iabc 同刻度；313.3 counts/A)
@@ -1361,21 +1365,44 @@ int main(void) {
                 bool bEmbUVWLockActive = (uGF.UVWLock != 0);
                 bool bEmbReverseEdge = bEmbUVWLockActive && (uGF.Direction != s_u8EmbTravelDir);
 
-                // [有動力倒溜/倒衝] 用速度環的帶號命令/回授(已同座標系,見 CNRead 的 Speed 符號校正)
-                //   判斷「命令一個方向、實際往反方向動」。HallPulsesLatch 閘門排除靜止抖動/32767 尖峰。
-                bool bEmbDirMismatch =
-                    (abs(piInputOmega.inReference) >= EMB_ROLLBACK_CMD_THRESHOLD) &&
-                    (abs(piInputOmega.inMeasure) >= EMB_ROLLBACK_SPEED_THRESHOLD) &&
-                    (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES) &&
-                    (((piInputOmega.inReference > 0) && (piInputOmega.inMeasure < 0)) ||
-                     ((piInputOmega.inReference < 0) && (piInputOmega.inMeasure > 0)));
+                // [有動力倒溜/倒衝] 偵測訊號來自 CNRead_Inline 的連續反向霍爾邊緣計數
+                //   (g_u8EmbRevEdgeCnt)。與速度無關 → 再慢的潛行倒溜也會在固定位移內被抓到，
+                //   這是「倒溜不超過 1/4 車輪(91 邊緣)」規格的基礎。1 邊緣 = 車輪 1.75 mm。
+                //
+                // [F/R 切換的抑制窗] 方向更新只允許在車速 <= 1.0 km/h 時發生(見下方 I_FR_SWITCH
+                //   的處理)，但切換後車仍可能以 <=1 km/h 滑行於舊方向 → 命令與滾動反向 → 會立即
+                //   鎖定並閂鎖至鬆油門。舊的 2 秒邏輯在此情境幾乎不會鎖(車先停了)，故這是新增的
+                //   鎖定事件。因此只在「命令符號由非零翻到相反非零」時起算抑制窗；由 0 變為非零
+                //   (上坡起步的情形)不抑制，坡道偵測仍然是立即的。
+                static int8_t s_i8EmbLastCmdSign = 0;
+                static uint32_t s_u32EmbFlipMs = 0;
+                int8_t i8EmbCmdSign = 0;
+                if (piInputOmega.inReference > EMB_ROLLBACK_CMD_THRESHOLD) {
+                    i8EmbCmdSign = 1;
+                } else if (piInputOmega.inReference < -EMB_ROLLBACK_CMD_THRESHOLD) {
+                    i8EmbCmdSign = -1;
+                }
+                if ((i8EmbCmdSign != 0) && (s_i8EmbLastCmdSign != 0) &&
+                    (i8EmbCmdSign != s_i8EmbLastCmdSign)) {
+                    s_u32EmbFlipMs = g_stSystemData.u32TimeMs;  // 真正的 F→R / R→F 翻轉
+                }
+                if (i8EmbCmdSign != 0) {
+                    s_i8EmbLastCmdSign = i8EmbCmdSign;
+                }
+                bool bEmbFlipHoldoff =
+                    (EMB_ROLLBACK_FLIP_HOLDOFF_MS > 0) &&
+                    ((g_stSystemData.u32TimeMs - s_u32EmbFlipMs) < EMB_ROLLBACK_FLIP_HOLDOFF_MS);
+
+                bool bEmbRollbackDetected = (g_u8EmbRevEdgeCnt >= EMB_ROLLBACK_REV_EDGES) &&
+                                            !bEmbFlipHoldoff &&
+                                            (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES);
 
                 E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(g_stSystemData.u16IEMBMv,
                                                                        g_stSystemData.i16TargetRpm,  // 使用者意圖轉速
                                                                        ReferenceRAW,                 // 馬達實際執行轉速
                                                                        bEmbUVWLockActive,            // [Plan A] UVW短路生效中
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
-                                                                       bEmbDirMismatch,              // [有動力倒溜] 命令/回授方向相反
+                                                                       bEmbRollbackDetected,         // [有動力倒溜] 連續反向霍爾邊緣達門檻
                                                                        (uGF.BrakeSWOn == 1),         // [IBKS] 手剎車/充電中 → 立即鎖定
                                                                        g_stSystemData.u32TimeMs);
 
@@ -2789,6 +2816,31 @@ void DoControl(void) {
                 Speed = -Speed;
             //==============================================================================
             HallPulses++;
+
+            // --- [有動力倒溜] 連續反向霍爾邊緣計數 (供 EMB 立即鎖定) ---
+            //   每個邊緣比對「滾動方向」與「命令方向」，連續反向達門檻即視為倒溜。
+            //   符號慣例沿用上面那行：Direction == DirectionDefault ⇒ Speed 取負 ⇒ 往負方向滾。
+            //   用邊緣「計數」而非速度，是為了讓偵測與速度無關 —— 再慢的潛行倒溜也會在固定
+            //   位移(1 邊緣 = 車輪 1.75 mm)內被抓到，才能保證「不超過 1/4 車輪」的規格。
+            //   靜止抖動時方向會交替，下面的 else 分支會把計數清零，故自動免疫。
+            {
+                signed int i16EmbCmdRef = piInputOmega.inReference;
+                if ((i16EmbCmdRef > EMB_ROLLBACK_CMD_THRESHOLD) ||
+                    (i16EmbCmdRef < -EMB_ROLLBACK_CMD_THRESHOLD)) {
+                    bool bEmbRollingNeg = (uGF.Direction == uGF.DirectionDefault);
+                    bool bEmbCmdNeg = (i16EmbCmdRef < 0);
+                    if (bEmbRollingNeg != bEmbCmdNeg) {
+                        if (g_u8EmbRevEdgeCnt < 255u) {
+                            g_u8EmbRevEdgeCnt++;
+                        }
+                    } else {
+                        g_u8EmbRevEdgeCnt = 0;  // 方向一致 → 清零
+                    }
+                } else {
+                    // 無有效驅動命令 → 解除武裝 (無動力倒溜由 WAITING_TO_LOCK 的 Plan B 處理)
+                    g_u8EmbRevEdgeCnt = 0;
+                }
+            }
         }
         if (HallPulsesLatch < MotorStartSpeedPulses)
             Speed = 0;

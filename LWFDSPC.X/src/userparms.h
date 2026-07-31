@@ -262,10 +262,41 @@ minimum value accepted */
 // 獨立於 ReGen 的 BrakeStopSpeedPulses，調此值不影響 ReGen 起煞點。
 #define UVW_LOCK_STOP_PULSES 3
 
-// 有動力倒溜/倒衝偵測門檻 (命令方向與帶號回授異號 → EMB failsafe)。用 piInputOmega.inReference/inMeasure。
-#define EMB_ROLLBACK_CMD_THRESHOLD 500          // |inReference| 需 >= 此值；183 馬達RPM = 0.35 km/h (OUTPUT_MIN=1500 count)
-#define EMB_ROLLBACK_SPEED_THRESHOLD Q15(0.02)  // |inMeasure|(Speed,Q15) 需 >= 此值；655 count = 240 馬達RPM = 0.45 km/h
-#define EMB_ROLLBACK_MIN_PULSES 3               // HallPulsesLatch >= 此值(確實在滾動)；3 pulses = 100 馬達RPM = 0.19 km/h
+// =============================================================================
+//  有動力倒溜/倒衝偵測 (命令一個方向、車實際往反方向動 → EMB 立即鎖定)
+// =============================================================================
+//  規格：倒溜量不得超過 1/4 車輪 = 91.4 個霍爾邊緣 = 159.6 mm。
+//  偵測訊號改為「每個霍爾邊緣」比對滾動方向與命令方向 (見 main.c 的 CNRead_Inline)，
+//  連續反向達 EMB_ROLLBACK_REV_EDGES 即鎖 —— 與速度無關，再慢的潛行倒溜也會在固定
+//  位移內被抓到，這是滿足上述規格的關鍵 (舊版靠速度門檻，慢速倒溜永遠不觸發)。
+//
+//  位移換算 (18 邊緣/機械轉 x 齒比 20.30 = 365.4 邊緣/輪轉, 8 吋輪周長 638 mm)：
+//    1 邊緣 = 1.75 mm
+//      N=3  →   5.2 mm (1/122 輪)      N=16 →  28.0 mm (1/23 輪)
+//      N=4  →   7.0 mm (1/91  輪)      N=45 →  78.6 mm (1/8  輪)
+//      N=8  →  14.0 mm (1/46  輪)      N=91 → 159.0 mm (1/4  輪 ← 規格上限)
+#define EMB_ROLLBACK_CMD_THRESHOLD 500  // |inReference| 需 >= 此值才啟用偵測；183 馬達RPM = 0.35 km/h
+#define EMB_ROLLBACK_REV_EDGES 3        // 連續反向霍爾邊緣門檻 → 立即鎖定。3 = 倒退 5.2 mm
+                                        //   太靈敏(誤鎖)就加大，太遲鈍就縮小；上限見下方護欄
+
+// 每輪轉的霍爾邊緣數與 1/4 車輪上限 (由 motor_scale.h 的參數推導，改齒比/極對數會自動跟著變)
+#define EMB_HALL_EDGES_PER_WHEEL_REV ((HALL_EDGES_PER_REV * GEAR_RATIO_X100) / 100)
+#define EMB_ROLLBACK_MAX_EDGES (EMB_HALL_EDGES_PER_WHEEL_REV / 4)
+#if (EMB_ROLLBACK_REV_EDGES) > (EMB_ROLLBACK_MAX_EDGES)
+#error "EMB_ROLLBACK_REV_EDGES 超過 1/4 車輪 (91 邊緣) 的倒溜上限規格"
+#endif
+
+// 附加閘門：HallPulsesLatch(每 100ms 邊緣數) >= 此值才允許鎖定。**0 = 停用**(預設)。
+//   ⚠ 設為非 0 會重新引入「最低倒溜速度」的限制 (1 pulse/100ms = 0.063 km/h)，
+//   低於該速度的慢速潛行倒溜將永遠不觸發鎖定 → 會違反「不超過 1/4 車輪」的規格；
+//   而且 HallPulsesLatch 每 100ms 才更新，會多出最多 100ms 的延遲。
+//   保留可調是為了在實機出現誤鎖時，能用它排除極低速的抖動來源。
+#define EMB_ROLLBACK_MIN_PULSES 0
+
+// F/R 切換後的誤觸抑制窗 (ms)。方向更新只允許在車速 <= 1.0 km/h 時發生，但切換後車仍可能
+//   低速滑行於舊方向 → 命令與滾動反向 → 立即鎖定並閂鎖至鬆油門。只在「命令符號由非零翻到
+//   相反非零」時起算；由 0 變非零(上坡起步)不抑制，故坡道偵測仍是立即的。0 = 停用。
+#define EMB_ROLLBACK_FLIP_HOLDOFF_MS 300
 
 // 電壓向量限制
 #define MAX_VOLTAGE_VECTOR 0.95  // 最大電壓向量限制為 95%，用於 SVPWM 調變

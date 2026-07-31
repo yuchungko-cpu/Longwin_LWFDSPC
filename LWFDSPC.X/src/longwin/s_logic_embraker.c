@@ -13,9 +13,7 @@ static bool s_bFailsafeTiming = false;
 // UVW lock 生效起算的計時，用於「UVW lock 後延遲鎖定 EMB」
 static uint32_t s_u32UvwLockTimerMs = 0;
 static bool s_bUvwLockTiming = false;
-// 有動力下方向相反(倒溜/倒衝)起算的計時；latched 表示已因此上鎖、須待鬆油門才解
-static uint32_t s_u32RollbackTimerMs = 0;
-static bool s_bRollbackTiming = false;
+// 有動力下的倒溜/倒衝：latched 表示已因此上鎖、須待鬆油門才解
 static bool s_bRollbackLatched = false;
 
 // --- Private Helper Functions ---
@@ -42,7 +40,6 @@ bool logic_embraker_init(uint16_t u16IembMv) {
     // 重置所有計時/閂鎖旗標
     s_bUvwLockTiming = false;
     s_bFailsafeTiming = false;
-    s_bRollbackTiming = false;
     s_bRollbackLatched = false;
 
     // 檢查初始故障狀態
@@ -63,7 +60,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         int16_t i16ActualMotorCommand,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
-                                        bool bDirMismatch,
+                                        bool bRollbackDetected,
                                         bool bBrakeSwOn,
                                         uint32_t u32CurrentTimeMs) {
     E_EMBRAKER_ACTION eAction = EMBRAKER_ACTION_NONE;
@@ -99,7 +96,6 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
         eNextState = EMBRAKER_STATE_LOCKED;
         s_bUvwLockTiming = false;
         s_bFailsafeTiming = false;
-        s_bRollbackTiming = false;
     } else { // 非故障狀態，執行正常狀態機
         switch (s_eCurrentState) {
             case EMBRAKER_STATE_LOCKED:
@@ -132,23 +128,15 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eNextState = EMBRAKER_STATE_WAITING_TO_LOCK;
                     s_bUvwLockTiming = false;   // 重置 UVW lock 延遲計時
                     s_bFailsafeTiming = false;  // 重置 failsafe 計時 (改為命令歸零後才起算)
-                    s_bRollbackTiming = false;  // 重置有動力倒溜計時
-                } else if (bDirMismatch) {
-                    // [有動力倒溜 failsafe] 命令方向與實際帶號回授異號且確實在滾動 → 計時,
-                    //   持續 EMBRAKER_ROLLBACK_LOCK_MS 即強制鎖定並閂鎖(待鬆油門才解)。
-                    //   馬達斷力交由既有 stall 保護處理(輪被鎖住→近零速+有命令→MotorStall 斷力並閂鎖)。
-                    if (!s_bRollbackTiming) {
-                        s_bRollbackTiming = true;
-                        s_u32RollbackTimerMs = u32CurrentTimeMs;
-                    } else if ((u32CurrentTimeMs - s_u32RollbackTimerMs) >= EMBRAKER_ROLLBACK_LOCK_MS) {
-                        eAction = EMBRAKER_ACTION_LOCK;
-                        eNextState = EMBRAKER_STATE_LOCKED;
-                        s_bRollbackTiming = false;
-                        s_bRollbackLatched = true;
-                    }
-                } else {
-                    // 方向一致(正常運轉) → 重置倒溜計時
-                    s_bRollbackTiming = false;
+                } else if (bRollbackDetected) {
+                    // [有動力倒溜] 偵測到即鎖 —— 不計時。偵測訊號是「連續 N 個與命令方向相反的
+                    //   霍爾邊緣」(main.c 的 g_u8EmbRevEdgeCnt)，N 個邊緣就是固定的車輪位移
+                    //   (1 邊緣 = 1.75 mm)，與速度無關，故慢速潛行倒溜也會在規格內的位移被攔下。
+                    //   鎖定後閂鎖至鬆油門(避免坡上仍有油門時被 LOCKED 的運轉前檢查放開又倒溜)。
+                    //   馬達斷力由 main.c 在 LOCK 動作時呼叫 MotorStallForceOutputZero() 處理。
+                    eAction = EMBRAKER_ACTION_LOCK;
+                    eNextState = EMBRAKER_STATE_LOCKED;
+                    s_bRollbackLatched = true;
                 }
                 break;
 

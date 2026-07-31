@@ -42,13 +42,16 @@ typedef enum {
 //  (3) [failsafe] 速度命令(ReferenceRAW)歸零後超過 EMBRAKER_LOCK_TIMEOUT_MS 仍未由 UVW lock
 //      鎖定(例如霍爾異常導致 UVW lock 從未生效) → 強制鎖定,確保 EMB 不會永遠不鎖。
 //      計時從「命令歸零」起算(非鬆油門瞬間)，避免 timeout 在減速斜坡期間被吃光而帶速硬鎖。
-//  (4) [有動力倒溜 failsafe] 油門作用中(RELEASED),若「命令方向與實際帶號回授異號」(命令前進卻
-//      後退、或命令後退卻前進)持續 EMBRAKER_ROLLBACK_LOCK_MS → 強制鎖定並閂鎖至鬆油門。
-//      涵蓋陡坡上有動力卻被重力拉著反向、且尚未近停(UVW lock/Plan B 到不了)的情形。
-//      方向由 main.c 用 piInputOmega.inReference/inMeasure(同座標系)判斷後以 bDirMismatch 傳入。
+//  (4) [有動力倒溜] 油門作用中(RELEASED),偵測到「命令一個方向、車卻往反方向動」→ **立即**
+//      鎖定並閂鎖至鬆油門。涵蓋陡坡上有動力卻被重力拉著反向、尚未近停(UVW lock/Plan B
+//      到不了)的情形。規格:倒溜量不得超過 1/4 車輪(91 個霍爾邊緣 / 159 mm)。
+//      偵測訊號由 main.c 的 CNRead_Inline 以「連續 N 個與命令方向相反的霍爾邊緣」
+//      (g_u8EmbRevEdgeCnt >= EMB_ROLLBACK_REV_EDGES) 產生後以 bRollbackDetected 傳入 ——
+//      用邊緣計數而非速度,是因為 N 個邊緣等於固定的車輪位移(1 邊緣 = 1.75 mm),與速度無關,
+//      再慢的潛行倒溜也會在規格內被攔下(舊版靠 0.45 km/h 速度門檻 + 2 秒計時,慢速倒溜
+//      永遠不觸發、快速倒溜也已滑行數十公分)。門檻與抑制窗見 userparms.h。
 #define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 50  // UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定
 #define EMBRAKER_LOCK_TIMEOUT_MS 3000         // 命令歸零後逾時強制鎖定的故障安全網 (ms)
-#define EMBRAKER_ROLLBACK_LOCK_MS 2000        // 有動力下方向相反持續此時間 → 強制鎖定 (ms)
 
 // --- 以下參數目前未作為 EMB 動作條件 (保留定義供參考) ---
 #define EMBRAKER_LOCK_SPEED_KMH_X10 5   // (停用) 舊版低於此車速(km/h×10)則鎖定
@@ -70,7 +73,8 @@ bool logic_embraker_init(uint16_t u16IembMv);
  * @param i16ActualMotorCommand 實際發送給馬達的命令值 (用來確認是否為0)
  * @param bUVWLockActive    [Modified Plan A] UVW三相短路(平順停車)是否生效中
  * @param bReverseEdgeDetected [Plan B] 是否偵測到倒溜(與行駛方向相反的霍爾邊緣)
- * @param bDirMismatch      [有動力倒溜] 命令方向與實際帶號回授異號且確實在滾動(main.c 算好傳入)
+ * @param bRollbackDetected [有動力倒溜] 連續反向霍爾邊緣達 EMB_ROLLBACK_REV_EDGES(main.c 算好傳入)
+ *                          → 立即鎖定並閂鎖至鬆油門
  * @param bBrakeSwOn        [IBKS] 手剎車/充電中訊號作用中 (RC12 為 Low → uGF.BrakeSWOn==1)。
  *                          為 true 時**立即鎖定**，不經 UVW 延遲也不等 timeout failsafe。
  * @param u32CurrentTimeMs  目前的系統時間 (毫秒)
@@ -81,7 +85,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         int16_t i16ActualMotorCommand,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
-                                        bool bDirMismatch,
+                                        bool bRollbackDetected,
                                         bool bBrakeSwOn,
                                         uint32_t u32CurrentTimeMs);
 
