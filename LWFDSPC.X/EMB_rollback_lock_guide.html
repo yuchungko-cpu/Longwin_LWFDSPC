@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMB 倒溜鎖定 — 調參數說明</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.7; }
+  .wrap { max-width:1040px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 26px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:20px 24px; margin:0 0 20px; }
+  h2 { font-size:1.28rem; margin:0 0 14px; }
+  h2 .n { display:inline-block; width:30px; height:30px; line-height:30px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:1rem;
+          margin-right:10px; font-weight:800; }
+  h3 { font-size:1.02rem; margin:18px 0 8px; color:var(--accent); }
+  code { background:var(--code); padding:1px 6px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.88em; color:#ffd580; }
+  .path { display:inline-block; background:#ffd23f; color:#1a1200;
+          border:2px solid #ffe082; border-radius:6px; padding:4px 12px 4px 30px;
+          font-family:Consolas,monospace; font-size:.94rem; font-weight:800;
+          position:relative; box-shadow:0 0 12px rgba(255,210,63,.45);
+          letter-spacing:.2px; }
+  .path::before { content:"\1F4C1"; position:absolute; left:8px; top:3px;
+                  font-size:1rem; filter:grayscale(.1); }
+  .path b { color:#8a1c00; }
+  td .path { white-space:nowrap; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow-x:auto; font-family:Consolas,monospace; font-size:.86rem; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.88rem; }
+  th,td { border:1px solid var(--border); padding:9px 11px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); }
+  td.c { text-align:center; white-space:nowrap; }
+  ul,ol { margin:8px 0; padding-left:24px; }
+  li { margin:6px 0; }
+  .step { background:var(--card2); border-radius:8px; padding:14px 18px; margin:12px 0;
+          border-left:4px solid var(--accent); }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .big { color:var(--warn); font-weight:700; }
+  .tag { display:inline-block; font-size:.72rem; padding:1px 8px; border-radius:10px;
+         vertical-align:2px; margin-left:6px; font-weight:700; }
+  .tag.on { background:rgba(63,185,80,.18); color:#7ee787; border:1px solid #2ea043; }
+  .tag.off { background:rgba(159,176,192,.14); color:var(--muted); border:1px solid #3d4b5a; }
+  .spec { background:rgba(78,161,255,.10); border:1px solid var(--accent); border-radius:8px;
+          padding:14px 18px; margin:14px 0; }
+  .spec b { color:var(--accent); }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EMB 倒溜鎖定 — 調參數說明</h1>
+  <p class="sub">使用者版 &nbsp;|&nbsp; 專案 LWFDSPC &nbsp;|&nbsp; 2026-07-31 &nbsp;|&nbsp; 所有參數皆為 <b>#define</b>，修改後需<b>重新編譯燒錄</b>才生效</p>
+
+  <div class="note">本文只講<b>倒溜鎖定</b>這一條路徑。EMB 的整體狀態機、IEMB 故障偵測、停車上鎖延遲請看同目錄的
+  <code>EMB_parameters_guide.html</code> 與 <code>EMB_tuning_guide.html</code>；那兩份文件寫於本功能加入之前，<b>不包含本頁的內容</b>。</div>
+
+  <!-- ============ 0. 規格 ============ -->
+  <div class="card">
+    <h2><span class="n">0</span>規格與現況</h2>
+    <div class="spec">
+      <b>設計規格：命令前進、車卻後退時，倒溜量不得超過 1/4 車輪。</b><br>
+      1/4 車輪 = <b>91 個霍爾邊緣 = 159 mm ≈ 16 cm</b>（8 吋輪，周長 638 mm，365 邊緣/輪轉）
+    </div>
+    <p>目前設定：連續 <b>3 個</b>反向霍爾邊緣就鎖定，也就是<b>倒退約 5 mm（0.5 cm）</b>，離規格上限有 30 倍餘裕。</p>
+    <table>
+      <tr><th style="width:230px">1 個霍爾邊緣</th><td class="c">車輪 <b>1.75 mm</b></td><td class="c">1/365 輪轉</td><td class="c">馬達 20°</td></tr>
+    </table>
+    <div class="ok"><b>鎖定與車速無關。</b>用「邊緣數」而不是「速度」當條件，所以再慢的潛行倒溜也會在同樣的位移被攔下 —— 這是能保證上述規格的關鍵。</div>
+  </div>
+
+  <!-- ============ 1. 兩種倒溜 ============ -->
+  <div class="card">
+    <h2><span class="n">1</span>先分清楚：兩種倒溜走不同的路</h2>
+    <table>
+      <tr><th style="width:130px"></th><th>有動力倒溜<span class="tag on">本文主題</span></th><th>無動力倒溜</th></tr>
+      <tr><th>情境</th><td><b>油門踩著</b>，坡度大於馬達扭力，車被重力拉著後退（上坡起步）</td><td><b>沒踩油門</b>，車停在坡上被重力拉著滑，或被人推</td></tr>
+      <tr><th>EMB 狀態</th><td class="c">RELEASED（煞車已放開，馬達在出力）</td><td class="c">WAITING_TO_LOCK（正在等上鎖）</td></tr>
+      <tr><th>偵測方式</th><td>連續 N 個「與<b>命令方向</b>相反」的霍爾邊緣</td><td>UVW 短路後，轉向與<b>先前行駛方向</b>相反（Plan B）</td></tr>
+      <tr><th>動作</th><td>立即鎖定 + <b>閂鎖到鬆油門</b></td><td>立即鎖定（不閂鎖）</td></tr>
+      <tr><th>參數</th><td>本文第 <a href="#s3" style="color:var(--accent)">3</a> 節</td><td>無可調參數（純方向比對）</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.86rem">另外還有兩條與倒溜無關的上鎖路徑：UVW 短路後延遲上鎖（正常停車）、命令歸零逾時 failsafe（霍爾異常時的保命線）。見 <code>EMB_parameters_guide.html</code>。</p>
+  </div>
+
+  <!-- ============ 2. 運作流程 ============ -->
+  <div class="card">
+    <h2><span class="n">2</span>它是怎麼運作的</h2>
+<pre>每個霍爾邊緣 (50 µs ISR 內)                    <span style="color:#9fb0c0">main.c CNRead_Inline</span>
+   ├─ 命令 |inReference| &lt; CMD_THRESHOLD ? ──▶ 計數歸零（解除武裝）
+   ├─ 滾動方向 == 命令方向 ?              ──▶ 計數歸零
+   └─ 滾動方向 != 命令方向 ?              ──▶ g_u8EmbRevEdgeCnt++
+
+每 20 ms (EMB 任務)                            <span style="color:#9fb0c0">main.c 約 1396 行</span>
+   └─ g_u8EmbRevEdgeCnt &gt;= REV_EDGES
+      且 不在 F/R 切換抑制窗內
+      且 HallPulsesLatch &gt;= MIN_PULSES  ──▶ bEmbRollbackDetected = true
+                                                 │
+                                                 ▼
+狀態機 RELEASED 分支                           <span style="color:#9fb0c0">s_logic_embraker.c 約 131 行</span>
+   └─ 立即 LOCK ＋ 進入 LOCKED ＋ 設定閂鎖
+                                                 │
+                        ┌────────────────────────┴────────────────────────┐
+                        ▼                                                 ▼
+              O_EM_BRAKE_CTRL = LOW                       MotorStallForceOutputZero()
+              （電磁煞車夾住）                             （馬達同時斷力，不會頂著煞車出力）</pre>
+    <div class="note"><b>方向怎麼判斷的：</b><code>uGF.Direction</code> 由霍爾狀態的轉移對在<b>每個邊緣</b>更新（<span class="path">src/HallScan_V2_1.c : <b>130</b></span>）。遇到不合法的轉移（跳狀態）時它<b>維持原值不變</b>，所以不會因為雜訊亂跳。</div>
+    <div class="ok"><b>靜止抖動不會誤鎖。</b>車輪停在霍爾邊界來回時，方向會一正一反交替，上面的「方向一致 → 計數歸零」就會把計數清掉，因此不需要額外的防彈跳時間。</div>
+  </div>
+
+  <!-- ============ 3. 可調參數 ============ -->
+  <div class="card" id="s3">
+    <h2><span class="n">3</span>可調參數（全部在 <code>src/userparms.h</code>）</h2>
+
+    <h3>3-1. 主旋鈕：要倒退多少才鎖</h3>
+    <p><span class="path">src/userparms.h : <b>279</b></span></p>
+<pre>#define EMB_ROLLBACK_REV_EDGES 3        // 目前 = 3，倒退 5.2 mm</pre>
+    <p><b>這是唯一一個平常需要動的參數。</b>覺得太靈敏（正常騎乘被誤鎖）就加大；覺得倒溜太多才鎖就縮小。</p>
+    <table>
+      <tr><th class="c" style="width:80px">設定值</th><th class="c">倒退距離</th><th class="c">佔車輪</th><th>感受</th></tr>
+      <tr><td class="c">1</td><td class="c">1.7 mm</td><td class="c">1/365</td><td>極靈敏，只要動一格就鎖（不建議，容易被量測抖動誤觸）</td></tr>
+      <tr><td class="c">2</td><td class="c">3.5 mm</td><td class="c">1/183</td><td>很靈敏</td></tr>
+      <tr><td class="c"><b>3</b> <span class="tag on">目前</span></td><td class="c">5.2 mm</td><td class="c">1/122</td><td>幾乎察覺不到就鎖住</td></tr>
+      <tr><td class="c">4</td><td class="c">7.0 mm</td><td class="c">1/91</td><td></td></tr>
+      <tr><td class="c">8</td><td class="c">14 mm</td><td class="c">1/46</td><td>約一節手指</td></tr>
+      <tr><td class="c">16</td><td class="c">28 mm</td><td class="c">1/23</td><td>明顯感覺到退了一下</td></tr>
+      <tr><td class="c">45</td><td class="c">79 mm</td><td class="c">1/8</td><td>約 8 cm</td></tr>
+      <tr><td class="c">91</td><td class="c">159 mm</td><td class="c"><b>1/4</b></td><td><b>規格上限</b>，不能再大</td></tr>
+    </table>
+    <div class="danger"><b>超過 91 會編譯失敗，不會靜默放行。</b>護欄在 <span class="path">src/userparms.h : <b>283~287</b></span>：
+<pre style="margin:8px 0 0">#define EMB_HALL_EDGES_PER_WHEEL_REV ((HALL_EDGES_PER_REV * GEAR_RATIO_X100) / 100)
+#define EMB_ROLLBACK_MAX_EDGES (EMB_HALL_EDGES_PER_WHEEL_REV / 4)
+#if (EMB_ROLLBACK_REV_EDGES) &gt; (EMB_ROLLBACK_MAX_EDGES)
+#error "EMB_ROLLBACK_REV_EDGES 超過 1/4 車輪 (91 邊緣) 的倒溜上限規格"
+#endif</pre>
+    上限由極對數與齒比自動推導，<b>換馬達或改齒比時會自己跟著變</b>，不必手改。</div>
+
+    <h3>3-2. 什麼情況才啟用偵測</h3>
+    <p><span class="path">src/userparms.h : <b>278</b></span></p>
+<pre>#define EMB_ROLLBACK_CMD_THRESHOLD 500  // 0.35 km/h 的命令</pre>
+    <p>速度命令要大於這個值，才認為「駕駛確實要走」而啟用偵測。低於它就解除武裝（那屬於無動力倒溜，交給 Plan B）。<b>一般不需要動</b>；調高會讓輕踩油門時不受保護。</p>
+
+    <h3>3-3. F/R 切換的誤鎖防護</h3>
+    <p><span class="path">src/userparms.h : <b>299</b></span></p>
+<pre>#define EMB_ROLLBACK_FLIP_HOLDOFF_MS 300   // 0 = 停用</pre>
+    <p>方向切換只允許在車速 ≤ 1.0 km/h 時發生（<span class="path">src/longwin/codeSw.h : <b>90</b></span>），但切換後車可能還在以 ≤1 km/h 往舊方向滑 —— 這在偵測邏輯看來就是倒溜，會立即鎖定並閂鎖。這個抑制窗就是為此存在。</p>
+    <table>
+      <tr><th style="width:200px">命令符號變化</th><th>是否抑制</th><th>為什麼</th></tr>
+      <tr><td>0 → 前進（或 0 → 後退）</td><td class="c" style="color:#7ee787"><b>不抑制</b></td><td>這就是上坡起步的情形，必須立即偵測</td></tr>
+      <tr><td>前進 → 後退（或反之）</td><td class="c" style="color:var(--warn)"><b>抑制 300 ms</b></td><td>給滑行中的車一點時間停下來，避免切檔就被鎖</td></tr>
+    </table>
+    <p>若實機測試切 F/R 時仍會被鎖，把時間加大（例如 500 ms）。想確認這個防護有沒有在作用，設成 0 再測一次對照。</p>
+
+    <h3>3-4. 附加閘門（預設停用）</h3>
+    <p><span class="path">src/userparms.h : <b>294</b></span></p>
+<pre>#define EMB_ROLLBACK_MIN_PULSES 0       // 0 = 停用（預設）</pre>
+    <p>要求 <code>HallPulsesLatch</code>（每 100 ms 的霍爾邊緣數）達到此值才允許鎖定。</p>
+    <div class="danger"><b>設成非 0 會破壞 1/4 車輪的規格保證。</b>它等於重新加上一個「最低倒溜速度」的限制：
+    <table style="margin:8px 0 0">
+      <tr><th class="c" style="width:120px">設定值</th><td class="c">1</td><td class="c">2</td><td class="c">3</td><td class="c">5</td></tr>
+      <tr><th>最低倒溜速度</th><td class="c">0.063</td><td class="c">0.126</td><td class="c">0.189</td><td class="c">0.315 km/h</td></tr>
+    </table>
+    比這更慢的潛行倒溜將<b>永遠不會觸發鎖定</b>（例如 0.1 km/h 時，5.7 秒就走完 16 cm 了）；而且該值每 100 ms 才更新一次，會多出最多 100 ms 的延遲。<br>
+    <b>保留這個旋鈕只是為了：</b>若實機出現極低速抖動造成的誤鎖，可以用它把那個來源排除掉。用完建議調回 0。</div>
+  </div>
+
+  <!-- ============ 4. 鎖定後 ============ -->
+  <div class="card">
+    <h2><span class="n">4</span>鎖定之後會發生什麼</h2>
+    <div class="step"><b>① 電磁煞車夾住，馬達同時斷力</b><br>
+      <code>O_EM_BRAKE_CTRL</code> 拉低，同一時間呼叫 <code>MotorStallForceOutputZero()</code>（<span class="path">main.c : <b>1421</b></span>），
+      所以馬達不會頂著煞車繼續出力。</div>
+    <div class="step"><b>② 閂鎖：油門還踩著也不會放開</b><br>
+      狀態進入 LOCKED 並設定 <code>s_bRollbackLatched</code>（<span class="path">src/longwin/s_logic_embraker.c : <b>103~108</b></span>）。
+      LOCKED 狀態平常會做「運轉前檢查 → 放開煞車」，但閂鎖的守衛擋在最前面，所以<b>坡上油門仍踩著時不會被放開又倒溜</b>。</div>
+    <div class="step"><b>③ 解除條件：<span class="big">駕駛鬆油門</span></b><br>
+      油門回到門檻以下才解閂，之後回歸正常流程。<b>沒有自動解除、沒有計時解除。</b>
+      要在坡上重新起步，必須先鬆油門再重試。</div>
+    <div class="note"><b>這是刻意的設計。</b>若鎖定後自動放開，坡上會出現「鎖→放→又倒溜→鎖」的來回擺動。代價是上坡起步若每次都會微幅倒退，駕駛就得反覆「鬆油門重試」—— 若實測覺得干擾太大，先加大 <code>EMB_ROLLBACK_REV_EDGES</code>（給馬達更多時間建立扭力），而不是取消閂鎖。</div>
+  </div>
+
+  <!-- ============ 5. 測試 ============ -->
+  <div class="card">
+    <h2><span class="n">5</span>實機測試程序</h2>
+    <p>X2CScope 建議觀測：<code>g_u8EmbRevEdgeCnt</code>（反向邊緣計數）、<code>piInputOmega.inReference</code>（命令）、<code>piInputOmega.inMeasure</code>（帶號實際速度）。</p>
+    <table>
+      <tr><th style="width:40px">#</th><th style="width:230px">測試</th><th>預期結果</th></tr>
+      <tr><td class="c">1</td><td><b>上坡起步</b><br>坡上輕給油門</td>
+          <td>倒退約 0.5 cm 內鎖定並斷力；<b>鬆油門後才能重試</b>。用尺量倒退距離，應遠小於 16 cm</td></tr>
+      <tr><td class="c">2</td><td><b>平路正常起步／行駛</b></td>
+          <td>全程不觸發。<code>g_u8EmbRevEdgeCnt</code> 應維持 0，或偶發 1~2 後立刻歸零</td></tr>
+      <tr><td class="c">3</td><td><b>坡上靜止抖動</b><br>停在坡上讓車輪在霍爾邊界來回</td>
+          <td>方向交替使計數歸零，<b>不應誤鎖</b></td></tr>
+      <tr><td class="c">4</td><td><b>低速切 F/R</b><br>以 ≤1 km/h 滑行中切換方向</td>
+          <td>抑制窗內不鎖。把 <code>EMB_ROLLBACK_FLIP_HOLDOFF_MS</code> 設 0 再測一次，應該就會鎖 —— 以此確認防護有在作用</td></tr>
+      <tr><td class="c">5</td><td><b>無動力倒溜</b><br>鬆油門，被推著後退</td>
+          <td>本路徑不動作（命令閘門解除武裝），改由 Plan B 處理</td></tr>
+      <tr><td class="c">6</td><td><b>陡坡驗證規格</b><br>找最陡的實際坡度</td>
+          <td>倒退距離必須 &lt; 16 cm。若接近，縮小 <code>EMB_ROLLBACK_REV_EDGES</code></td></tr>
+    </table>
+    <div class="danger"><b>測試 1、3、6 請在有人扶車或有防護的情況下進行。</b>倒溜保護失效時車會在坡上持續後退。</div>
+  </div>
+
+  <!-- ============ 6. 症狀對照 ============ -->
+  <div class="card">
+    <h2><span class="n">6</span>症狀 → 該調哪裡</h2>
+    <table>
+      <tr><th style="width:280px">症狀</th><th>調整</th></tr>
+      <tr><td>上坡起步一給油門就被鎖住，完全起不來</td>
+          <td>加大 <code>EMB_ROLLBACK_REV_EDGES</code>（例如 3 → 8，允許倒退 1.4 cm），給馬達時間建立扭力。<b>不要動閂鎖邏輯</b></td></tr>
+      <tr><td>倒溜太多才鎖</td><td>縮小 <code>EMB_ROLLBACK_REV_EDGES</code></td></tr>
+      <tr><td>平路正常行駛偶爾被鎖</td>
+          <td>① 先用 scope 確認 <code>g_u8EmbRevEdgeCnt</code> 是否真的在累加；② 若是極低速時發生，暫時把 <code>EMB_ROLLBACK_MIN_PULSES</code> 設 2~3 驗證來源；③ 檢查霍爾相序與 <code>uGF.Direction</code> 是否正確</td></tr>
+      <tr><td>低速切前進/後退就被鎖</td><td>加大 <code>EMB_ROLLBACK_FLIP_HOLDOFF_MS</code>（300 → 500）</td></tr>
+      <tr><td>完全不會鎖</td>
+          <td>① 確認 <code>CODESW_EMBRAKER_ENABLE = 1</code>（<span class="path">src/longwin/codeSw.h : <b>32</b></span>）；② 確認 <code>EMB_ROLLBACK_MIN_PULSES = 0</code>；③ 確認命令有超過 <code>EMB_ROLLBACK_CMD_THRESHOLD</code>；④ scope 看 <code>g_u8EmbRevEdgeCnt</code> 是否卡在 0（方向偵測有問題）</td></tr>
+      <tr><td>鎖定瞬間有頓挫／異音</td>
+          <td>屬正常 —— 這是緊急保護，會同時夾煞車與斷力。若要更柔和只能讓它更早介入（縮小 N），在車速更低時就鎖</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ 7. 速查 ============ -->
+  <div class="card">
+    <h2><span class="n">7</span>一頁速查</h2>
+    <table>
+      <tr><th style="width:300px">參數</th><th class="c" style="width:80px">現值</th><th>檔案 : 行號</th></tr>
+      <tr><td><b><code>EMB_ROLLBACK_REV_EDGES</code></b><br><span style="color:var(--muted)">主旋鈕：幾個邊緣就鎖</span></td><td class="c"><b>3</b></td><td><span class="path">src/userparms.h : <b>279</b></span></td></tr>
+      <tr><td><code>EMB_ROLLBACK_CMD_THRESHOLD</code><br><span style="color:var(--muted)">啟用偵測的最低命令</span></td><td class="c">500</td><td><span class="path">src/userparms.h : <b>278</b></span></td></tr>
+      <tr><td><code>EMB_ROLLBACK_FLIP_HOLDOFF_MS</code><br><span style="color:var(--muted)">F/R 切換抑制窗</span></td><td class="c">300</td><td><span class="path">src/userparms.h : <b>299</b></span></td></tr>
+      <tr><td><code>EMB_ROLLBACK_MIN_PULSES</code><br><span style="color:var(--muted)">附加閘門（建議維持 0）</span></td><td class="c">0</td><td><span class="path">src/userparms.h : <b>294</b></span></td></tr>
+      <tr><td>1/4 車輪上限護欄</td><td class="c">91</td><td><span class="path">src/userparms.h : <b>283~287</b></span></td></tr>
+      <tr><td>反向邊緣計數（程式邏輯）</td><td class="c">—</td><td><span class="path">main.c CNRead_Inline</span></td></tr>
+      <tr><td>偵測訊號組合 + 抑制窗（程式邏輯）</td><td class="c">—</td><td><span class="path">main.c : <b>1368~1398</b></span></td></tr>
+      <tr><td>狀態機的立即鎖定分支（程式邏輯）</td><td class="c">—</td><td><span class="path">src/longwin/s_logic_embraker.c : <b>131~140</b></span></td></tr>
+      <tr><td>EMB 功能總開關</td><td class="c">1</td><td><span class="path">src/longwin/codeSw.h : <b>32</b></span></td></tr>
+      <tr><td>方向切換允許車速</td><td class="c">1.0 km/h</td><td><span class="path">src/longwin/codeSw.h : <b>90</b></span></td></tr>
+    </table>
+    <div class="note">行號以 2026-07-31 的版本為準；改過檔案後行號會位移，用參數名稱搜尋最可靠。</div>
+  </div>
+
+  <!-- ============ 8. 附錄 ============ -->
+  <div class="card">
+    <h2><span class="n">8</span>附錄：為什麼改成用「邊緣數」</h2>
+    <p>2026-07-31 之前的做法要同時滿足三個條件才開始計時，再持續 2 秒才鎖：</p>
+    <table>
+      <tr><th style="width:280px">舊條件</th><th class="c">值</th><th>問題</th></tr>
+      <tr><td>倒溜速度 <code>&gt;= Q15(0.02)</code></td><td class="c">0.45 km/h</td><td><b>慢速潛行倒溜永遠不觸發</b></td></tr>
+      <tr><td><code>HallPulsesLatch &gt;= 3</code></td><td class="c">0.19 km/h</td><td>該值每 100 ms 才更新，額外延遲</td></tr>
+      <tr><td>持續 <code>EMBRAKER_ROLLBACK_LOCK_MS</code></td><td class="c">2000 ms</td><td>光是這 2 秒就能滑掉數十公分</td></tr>
+    </table>
+    <p><b>只把 2 秒改小沒有用</b> —— 速度門檻還在，慢速倒溜依然抓不到。改用「連續 N 個反向霍爾邊緣」之後，條件變成純位移，與速度脫鉤，才能寫出「不超過 1/4 車輪」這種可驗證的規格。</p>
+  </div>
+
+  <p class="foot">LWFDSPC EMB 倒溜鎖定調參數說明 &nbsp;·&nbsp; 2026-07-31 &nbsp;·&nbsp; 相關文件：EMB_parameters_guide.html（狀態機全貌）、EMB_tuning_guide.html（停車上鎖時機）、speed_profile_tuning_guide.html（加減速曲線）</p>
+</div>
+</body>
+</html>
