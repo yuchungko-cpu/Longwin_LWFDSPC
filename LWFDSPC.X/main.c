@@ -1322,6 +1322,7 @@ int main(void) {
                                                                        bEmbUVWLockActive,            // [Plan A] UVW短路生效中
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
                                                                        bEmbDirMismatch,              // [有動力倒溜] 命令/回授方向相反
+                                                                       (uGF.BrakeSWOn == 1),         // [IBKS] 手剎車/充電中 → 立即鎖定
                                                                        g_stSystemData.u32TimeMs);
 
                 // --- [NEW] Final safety check to override brake action ---

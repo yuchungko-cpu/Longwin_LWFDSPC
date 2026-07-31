@@ -64,6 +64,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
                                         bool bDirMismatch,
+                                        bool bBrakeSwOn,
                                         uint32_t u32CurrentTimeMs) {
     E_EMBRAKER_ACTION eAction = EMBRAKER_ACTION_NONE;
     E_EMBRAKER_STATE eNextState = s_eCurrentState;
@@ -81,6 +82,24 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
             // 仍處於故障，保持鎖定
             eAction = EMBRAKER_ACTION_LOCK;
         }
+    } else if (bBrakeSwOn) {
+        // [IBKS 立即鎖定] 手剎車/充電中 (RC12 Low) → 立即鎖定 EMB，不經任何延遲。
+        //   必須是獨立的最高優先分支，不能只靠「把馬達命令歸零」間接觸發，原因:
+        //   (1) 油門仍踩住時 DoControl 的 1kHz 速度命令任務會持續重算 i16TargetRpm,
+        //       使 bUvwDriveRequested 成立 → uGF.UVWLock 永遠 latch 不上 → UVW 主路徑(延遲
+        //       EMBRAKER_SHORT_TO_LOCK_DELAY_MS 後鎖定)整條失效;
+        //   (2) 只剩 EMBRAKER_LOCK_TIMEOUT_MS(3000ms) 的 failsafe 能鎖 → 完全不是「立即」,
+        //       且 IBKS 在 3 秒內解除就從未鎖過;
+        //   (3) 該 3 秒計時還會被競態清掉: 1kHz 任務若插在 main.c 對 i16TargetRpm 歸零與本
+        //       函式讀取之間,本函式會看到非零命令 → WAITING_TO_LOCK 的 bIsActive 分支把狀態
+        //       退回 RELEASED 並清掉 s_bFailsafeTiming,3 秒重新從頭計。
+        //   同時把狀態強制設為 LOCKED,IBKS 解除後才能走正常的「運轉前檢查 → 釋放」流程,
+        //   避免硬體被鎖住卻沒有任何分支負責解鎖。
+        eAction = EMBRAKER_ACTION_LOCK;
+        eNextState = EMBRAKER_STATE_LOCKED;
+        s_bUvwLockTiming = false;
+        s_bFailsafeTiming = false;
+        s_bRollbackTiming = false;
     } else { // 非故障狀態，執行正常狀態機
         switch (s_eCurrentState) {
             case EMBRAKER_STATE_LOCKED:

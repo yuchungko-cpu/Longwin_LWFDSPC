@@ -71,6 +71,8 @@ bool logic_embraker_init(uint16_t u16IembMv);
  * @param bUVWLockActive    [Modified Plan A] UVW三相短路(平順停車)是否生效中
  * @param bReverseEdgeDetected [Plan B] 是否偵測到倒溜(與行駛方向相反的霍爾邊緣)
  * @param bDirMismatch      [有動力倒溜] 命令方向與實際帶號回授異號且確實在滾動(main.c 算好傳入)
+ * @param bBrakeSwOn        [IBKS] 手剎車/充電中訊號作用中 (RC12 為 Low → uGF.BrakeSWOn==1)。
+ *                          為 true 時**立即鎖定**，不經 UVW 延遲也不等 timeout failsafe。
  * @param u32CurrentTimeMs  目前的系統時間 (毫秒)
  * @return E_EMBRAKER_ACTION 應對煞車硬體執行的動作
  */
@@ -80,6 +82,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
                                         bool bDirMismatch,
+                                        bool bBrakeSwOn,
                                         uint32_t u32CurrentTimeMs);
 
 /**
