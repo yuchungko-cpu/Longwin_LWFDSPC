@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>速度曲線 (加速/減速) 調參數說明</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.7; }
+  .wrap { max-width:1040px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 26px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:20px 24px; margin:0 0 20px; }
+  h2 { font-size:1.28rem; margin:0 0 14px; }
+  h2 .n { display:inline-block; width:30px; height:30px; line-height:30px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:1rem;
+          margin-right:10px; font-weight:800; }
+  h3 { font-size:1.02rem; margin:18px 0 8px; color:var(--accent); }
+  code { background:var(--code); padding:1px 6px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.88em; color:#ffd580; }
+  .path { display:inline-block; background:#ffd23f; color:#1a1200;
+          border:2px solid #ffe082; border-radius:6px; padding:4px 12px 4px 30px;
+          font-family:Consolas,monospace; font-size:.94rem; font-weight:800;
+          position:relative; box-shadow:0 0 12px rgba(255,210,63,.45);
+          letter-spacing:.2px; }
+  .path::before { content:"\1F4C1"; position:absolute; left:8px; top:3px;
+                  font-size:1rem; filter:grayscale(.1); }
+  .path b { color:#8a1c00; }
+  td .path { white-space:nowrap; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow-x:auto; font-family:Consolas,monospace; font-size:.86rem; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.88rem; }
+  th,td { border:1px solid var(--border); padding:9px 11px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); }
+  td.c { text-align:center; white-space:nowrap; }
+  ul,ol { margin:8px 0; padding-left:24px; }
+  li { margin:6px 0; }
+  .step { background:var(--card2); border-radius:8px; padding:14px 18px; margin:12px 0;
+          border-left:4px solid var(--accent); }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:10px 14px; border-radius:6px; margin:12px 0; }
+  .big { color:var(--warn); font-weight:700; }
+  .tag { display:inline-block; font-size:.72rem; padding:1px 8px; border-radius:10px;
+         vertical-align:2px; margin-left:6px; font-weight:700; }
+  .tag.on { background:rgba(63,185,80,.18); color:#7ee787; border:1px solid #2ea043; }
+  .tag.off { background:rgba(159,176,192,.14); color:var(--muted); border:1px solid #3d4b5a; }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+  .toc a { color:var(--accent); text-decoration:none; }
+  .toc a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>速度曲線 (加速 / 減速) — 調參數說明</h1>
+  <p class="sub">使用者版 &nbsp;|&nbsp; 專案 LWFDSPC &nbsp;|&nbsp; 2026-07-31 &nbsp;|&nbsp; 所有參數皆為 <b>#define</b>，修改後需<b>重新編譯燒錄</b>才生效</p>
+
+  <!-- ============ 0. 先讀這個：命令單位 ============ -->
+  <div class="card">
+    <h2><span class="n">0</span>先讀這個：所有數字的單位</h2>
+    <p>速度命令的單位是 <b>Q15 命令 count</b>（程式裡變數名雖是 <code>RpM</code>，但它不是 RPM）。換算：</p>
+    <table>
+      <tr><th>1 count</th><td class="c">0.366 馬達 RPM</td><td class="c">0.018 輪 RPM</td><td class="c"><b>0.00069 km/h</b></td></tr>
+      <tr><th>滿刻度 32768</th><td class="c">12000 馬達 RPM</td><td colspan="2" class="c">= <code>SPEED_FS_RPM</code></td></tr>
+      <tr><th>常用值</th><td class="c">1500 count = 1.04 km/h<br><span style="color:var(--muted)">起步速度 OUTPUT_MIN</span></td>
+          <td class="c">12000 count = 8.29 km/h<br><span style="color:var(--muted)">段位 5 的上限</span></td>
+          <td class="c">實機頂速 ≈ 7.2 km/h<br><span style="color:var(--muted)">受母線電壓限制</span></td></tr>
+    </table>
+    <p>參數表裡寫 <code>RPMX10_TO_CMD(43945)</code> 的意思是「馬達 4394.5 RPM 對應的 count」= 12000。<b>要改成別的速度，改括號裡的 RPM×10 就好，不用自己算 count。</b></p>
+    <div class="danger"><b>不要動 <code>SPEED_FS_RPM</code></b>（<span class="path">src/motor_scale.h : <b>40</b></span>）。它是整個命令域的刻度，改了會等比改變所有加減速率與速度環 PI 增益，必須全部重算。檔案內已有 <code>#error</code> 護欄擋住連帶不一致。</p>
+    </div>
+  </div>
+
+  <!-- ============ 1. 兩套加速機制 ============ -->
+  <div class="card">
+    <h2><span class="n">1</span>目前有兩套加速機制，先確認你在調哪一套</h2>
+    <p>總開關：<span class="path">src/longwin/codeSw.h : <b>117</b></span></p>
+<pre>#define CODESW_THROTTLE_ACCEL_FILTER_ENABLE (1)   // 目前 = 1</pre>
+    <table>
+      <tr><th style="width:90px">設定值</th><th>使用的機制</th><th>加速參數在哪</th><th>減速參數在哪</th></tr>
+      <tr><td class="c"><code>0</code></td>
+          <td><b>舊：step/time 查表</b><br><span style="color:var(--muted)">依油門電壓分 5 段</span></td>
+          <td>第 <a href="#s3" style="color:var(--accent)">3</a> 節</td>
+          <td rowspan="2">第 <a href="#s4" style="color:var(--accent)">4</a> 節<br><span style="color:var(--muted)">兩套共用同一張減速表</span></td></tr>
+      <tr><td class="c"><code>1</code> <span class="tag on">目前</span></td>
+          <td><b>新：限斜率 + 濾波</b><br><span style="color:var(--muted)">5 組曲線，程式內選</span></td>
+          <td>第 <a href="#s2" style="color:var(--accent)">2</a> 節</td></tr>
+    </table>
+    <div class="ok"><b>減速永遠走舊的 step/time 表。</b>新機制只接管「加速」；放油門或需要減速時，程式內部會自動轉回舊的減速表，所以煞停行為在兩種設定下完全一樣。</div>
+  </div>
+
+  <!-- ============ 2. 新機制：濾波曲線 ============ -->
+  <div class="card" id="s2">
+    <h2><span class="n">2</span>加速 — 新機制（限斜率 + 濾波）<span class="tag on">目前生效</span></h2>
+    <p>結構：<code>目標 → [限斜率 R] → [一階濾波 τ] → 速度命令</code>。<b>R 決定要幾秒到達，τ 只把折角磨圓</b>（消掉起步與到頂時的階梯感）。</p>
+
+    <h3>2-1. 選哪一組曲線（最常用的旋鈕）</h3>
+    <p><span class="path">src/longwin/s_logic_motor.h : <b>112</b></span></p>
+<pre>#define ACCEL_FILTER_CURVE_SELECT (4u)   // 1~5，目前 = 4</pre>
+    <p>改這一個數字就換一組手感，範圍 1~5（超出範圍編譯會直接報錯，不會靜默出錯）。</p>
+    <table>
+      <tr><th style="width:70px">曲線</th><th>加速率</th><th>到一半速度</th><th>到 95%</th><th>完全到頂</th><th>說明</th></tr>
+      <tr><td class="c">1</td><td class="c">0.69 km/h/s</td><td class="c">5.50 s</td><td class="c">10.23 s</td><td class="c">12.12 s</td><td>最緩</td></tr>
+      <tr><td class="c">2</td><td class="c">1.04 km/h/s</td><td class="c">3.75 s</td><td class="c">6.90 s</td><td class="c">8.73 s</td><td>緩</td></tr>
+      <tr><td class="c">3</td><td class="c">1.38 km/h/s</td><td class="c">2.88 s</td><td class="c">5.24 s</td><td class="c">7.05 s</td><td><b>與舊機制同手感</b></td></tr>
+      <tr><td class="c">4 <span class="tag on">目前</span></td><td class="c">2.07 km/h/s</td><td class="c">2.00 s</td><td class="c">3.60 s</td><td class="c">5.40 s</td><td>快</td></tr>
+      <tr><td class="c">5</td><td class="c">2.76 km/h/s</td><td class="c">1.57 s</td><td class="c">2.79 s</td><td class="c">4.60 s</td><td>最快</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.86rem">上表為「由起步速度 1.04 km/h 加到 8.29 km/h」的實測模擬值。</p>
+
+    <h3>2-2. 改曲線本身的參數</h3>
+    <p><span class="path">src/longwin/s_logic_motor.h : <b>132~139</b></span></p>
+<pre>#define ACCEL_FILTER_CURVE_TABLE_INIT                        \
+    {   {2, 7, ACCEL_FILTER_START_CMD_DEFAULT},   /* 曲線 1 */ \
+        {3, 7, ACCEL_FILTER_START_CMD_DEFAULT},   /* 曲線 2 */ \
+        {4, 7, ACCEL_FILTER_START_CMD_DEFAULT},   /* 曲線 3 */ \
+        {6, 7, ACCEL_FILTER_START_CMD_DEFAULT},   /* 曲線 4 */ \
+        {8, 7, ACCEL_FILTER_START_CMD_DEFAULT} }  /* 曲線 5 */</pre>
+    <p>每組是 <code>{ R, K, 起始速度 }</code>：</p>
+    <table>
+      <tr><th style="width:70px">欄位</th><th>意義</th><th>怎麼調</th></tr>
+      <tr><td class="c"><b>R</b></td><td>每 2 ms 增加的 count<br>= 加速率</td>
+          <td><b>要更快就加大、更慢就縮小。</b>R 每 +1 約 +0.35 km/h/s。<br>對照：R=2→0.69、4→1.38、6→2.07、8→2.76 km/h/s</td></tr>
+      <tr><td class="c"><b>K</b></td><td>磨圓程度<br>τ = 2<sup>K</sup> × 2 ms</td>
+          <td>K=7 → τ=0.26 s（目前全部用 7）。<b>+1 就是柔和一倍</b>，代價是到頂多花約 τ 的時間。<br>K=6→0.13 s、7→0.26 s、8→0.51 s</td></tr>
+      <tr><td class="c"><b>起始速度</b></td><td>一給油門就直接跳到這個速度，不從 0 慢慢爬</td>
+          <td>預設 <code>RPMX10_TO_CMD(5493)</code> = 1.04 km/h（<span class="path">s_logic_motor.h : <b>124</b></span>）。<br>覺得起步遲鈍可調高，覺得起步「彈一下」可調低。<b>每組曲線可各自設定。</b></td></tr>
+    </table>
+
+    <h3>2-3. 機制常數（通常不用動）</h3>
+    <table>
+      <tr><th>參數</th><th class="c">現值</th><th>位置</th><th>說明</th></tr>
+      <tr><td><code>ACCEL_FILTER_TICK_MS</code></td><td class="c">2</td><td><span class="path">s_logic_motor.h : <b>73</b></span></td>
+          <td>斜坡更新週期。改它會<b>等比改變所有曲線</b>的加速率與 τ，等於整組重調</td></tr>
+      <tr><td><code>ACCEL_FILTER_FRAC_BITS</code></td><td class="c">10</td><td><span class="path">s_logic_motor.h : <b>74</b></span></td>
+          <td><b>不要調小。</b>濾波狀態的小數位元，太少會讓命令卡在「差一點到不了目標」</td></tr>
+      <tr><td><code>ACCEL_FILTER_RESYNC_TOL</code></td><td class="c">64</td><td><span class="path">s_logic_motor.h : <b>79</b></span></td>
+          <td>命令被其他保護強制改寫時的重新同步門檻</td></tr>
+      <tr><td><code>ACCEL_FILTER_CURVE_FROM_MODBUS</code></td><td class="c">0</td><td><span class="path">s_logic_motor.h : <b>115</b></span></td>
+          <td>設 1 改由儀表/APP 的 <code>eAccelCurve</code> 選曲線。<b>目前協定語意未驗證，儀表送 0 會落到最緩的曲線 1，建議維持 0</b></td></tr>
+    </table>
+  </div>
+
+  <!-- ============ 3. 舊機制加速 ============ -->
+  <div class="card" id="s3">
+    <h2><span class="n">3</span>加速 — 舊機制（step/time 查表）<span class="tag off">目前未生效</span></h2>
+    <p>依<b>當下的油門電壓</b>落在哪一段，決定用哪一組 <code>{Step, Time}</code>：每 <code>Time</code> 毫秒把命令加 <code>Step</code> 個 count。加速率 = Step ÷ Time。</p>
+
+    <h3>3-1. 正轉加速表</h3>
+    <p>電壓分段門檻 <span class="path">src/longwin/s_logic_throttle.h : <b>72~75</b></span>　曲線 <span class="path">同檔 : <b>98~102</b></span></p>
+    <table>
+      <tr><th style="width:150px">油門電壓</th><th class="c">{Step,Time}</th><th class="c">加速率</th><th class="c">1.04→8.29 km/h</th></tr>
+      <tr><td>≤ 1200 mV</td><td class="c">{2, 1}</td><td class="c">1.38 km/h/s</td><td class="c">5.25 s</td></tr>
+      <tr><td>≤ 2100 mV</td><td class="c">{3, 2}</td><td class="c">1.04 km/h/s</td><td class="c">7.00 s</td></tr>
+      <tr><td>≤ 3000 mV</td><td class="c">{4, 3}</td><td class="c">0.92 km/h/s</td><td class="c">7.88 s</td></tr>
+      <tr><td>≤ 3900 mV</td><td class="c">{5, 4}</td><td class="c">0.86 km/h/s</td><td class="c">8.40 s</td></tr>
+      <tr><td>&gt; 3900 mV</td><td class="c">{6, 4}</td><td class="c">1.04 km/h/s</td><td class="c">7.00 s</td></tr>
+    </table>
+    <div class="note"><b>注意這張表是刻意「油門轉越多、斜坡越緩」</b>（1.38 → 0.86 km/h/s），用來避免大幅度需求時猛衝。<br>
+    另外：油門起步門檻已改為 <b>1200 mV</b>，與第一段的門檻 <code>V1_MV</code> 相同，所以<b>最緩的第 0 段 {2,1} 實際上碰不到</b>，輕踩起步會直接落在第 1 段 {3,2}。要恢復最緩起步段，需把 V1~V4 往上搬（等比例為 1560/2370/3180/3990）。</div>
+
+    <h3>3-2. 反轉加速表</h3>
+    <p><span class="path">src/longwin/s_logic_throttle.h : <b>85~88</b></span>（門檻）　<span class="path">同檔 : <b>114~118</b></span>（曲線）</p>
+    <table>
+      <tr><th style="width:150px">段</th><th class="c">{Step,Time}</th><th class="c">加速率</th></tr>
+      <tr><td>第 0 段（≤1200 mV）</td><td class="c">{1, 2}</td><td class="c">0.35 km/h/s</td></tr>
+      <tr><td>第 1、2 段</td><td class="c">{1, 3}</td><td class="c">0.23 km/h/s</td></tr>
+      <tr><td>第 3 段</td><td class="c">{2, 4}</td><td class="c">0.35 km/h/s</td></tr>
+      <tr><td>第 4 段（&gt;3900 mV）</td><td class="c">{3, 4}</td><td class="c">0.52 km/h/s</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.86rem">反轉刻意比正轉慢 3~4 倍，且上限只有 2.76 km/h。</p>
+  </div>
+
+  <!-- ============ 4. 減速 ============ -->
+  <div class="card" id="s4">
+    <h2><span class="n">4</span>減速（兩套機制共用，永遠是 step/time 表）</h2>
+    <p>減速表是依<b>當下的輸出速度</b>分段（不是油門電壓）—— 速度越高，減速越猛。</p>
+
+    <h3>4-1. 正轉減速表</h3>
+    <p>速度分段門檻 <span class="path">src/longwin/s_logic_throttle.h : <b>78~81</b></span>　曲線 <span class="path">同檔 : <b>106~110</b></span></p>
+    <table>
+      <tr><th style="width:190px">當下輸出速度</th><th class="c">{Step,Time}</th><th class="c">減速率</th><th class="c">滿速→0</th></tr>
+      <tr><td>≤ 2.49 km/h <span style="color:var(--muted)">(3600)</span></td><td class="c">{-25, 1}</td><td class="c">17.3 km/h/s</td><td class="c">0.42 s</td></tr>
+      <tr><td>≤ 3.94 km/h <span style="color:var(--muted)">(5700)</span></td><td class="c">{-30, 1}</td><td class="c">20.7 km/h/s</td><td class="c">0.35 s</td></tr>
+      <tr><td>≤ 5.39 km/h <span style="color:var(--muted)">(7800)</span></td><td class="c">{-35, 1}</td><td class="c">24.2 km/h/s</td><td class="c">0.30 s</td></tr>
+      <tr><td>≤ 6.84 km/h <span style="color:var(--muted)">(9900)</span></td><td class="c">{-40, 1}</td><td class="c">27.6 km/h/s</td><td class="c">0.26 s</td></tr>
+      <tr><td>&gt; 6.84 km/h</td><td class="c">{-40, 1}</td><td class="c">27.6 km/h/s</td><td class="c">0.26 s</td></tr>
+    </table>
+    <div class="note">門檻寫成 <code>RPMX10_TO_CMD(13184)</code> 這種形式，括號內是馬達 RPM×10。<b>要把某一段的邊界移到別的車速，改括號裡的數字即可。</b></div>
+
+    <h3>4-2. 反轉減速表</h3>
+    <p><span class="path">src/longwin/s_logic_throttle.h : <b>91~94</b></span>（門檻）　<span class="path">同檔 : <b>122~126</b></span>（曲線）</p>
+    <table>
+      <tr><th style="width:190px">段</th><th class="c">{Step,Time}</th><th class="c">減速率</th></tr>
+      <tr><td>≤ 1.38 km/h</td><td class="c">{-10, 1}</td><td class="c">6.9 km/h/s</td></tr>
+      <tr><td>≤ 1.73 km/h</td><td class="c">{-13, 1}</td><td class="c">9.0 km/h/s</td></tr>
+      <tr><td>≤ 2.07 km/h</td><td class="c">{-16, 1}</td><td class="c">11.1 km/h/s</td></tr>
+      <tr><td>≤ 2.42 km/h</td><td class="c">{-19, 1}</td><td class="c">13.1 km/h/s</td></tr>
+      <tr><td>&gt; 2.42 km/h</td><td class="c">{-22, 1}</td><td class="c">15.2 km/h/s</td></tr>
+    </table>
+
+    <h3>4-3. 故障時的緊急減速</h3>
+    <p><span class="path">src/longwin/s_logic_throttle.h : <b>64</b></span></p>
+<pre>#define LOGIC_THROTTLE_FAULT_DECEL_STEP_TIME {-10, 1}   // 6.9 km/h/s，滿速→0 約 1.2 s</pre>
+    <p>油門訊號電壓超出故障範圍時（斷線/短路）走這條，與正常減速分開。</p>
+  </div>
+
+  <!-- ============ 5. 起步與上限 ============ -->
+  <div class="card">
+    <h2><span class="n">5</span>起步門檻與速度上限（會直接改變手感）</h2>
+    <table>
+      <tr><th>參數</th><th class="c">現值</th><th>位置</th><th>說明</th></tr>
+      <tr><td><code>LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV</code></td><td class="c">1200 mV</td><td><span class="path">s_logic_throttle.h : <b>35</b></span></td>
+          <td>油門要轉到這個電壓才開始出力（死區）。<b>調高可抑制低端誤觸/抖動</b>，代價是要多轉一點才走</td></tr>
+      <tr><td><code>LOGIC_THROTTLE_FWD_VOLTAGE_MAX_MV</code></td><td class="c">4800 mV</td><td><span class="path">s_logic_throttle.h : <b>36</b></span></td>
+          <td>轉到這個電壓即為滿速。MIN 與 MAX 之間是線性對映</td></tr>
+      <tr><td><code>LOGIC_THROTTLE_FWD_OUTPUT_MIN</code></td><td class="c">1.04 km/h</td><td><span class="path">s_logic_throttle.h : <b>39</b></span></td>
+          <td>一過死區就跳到這個速度（起步速度）。<b>太高會有「彈出感」，太低會推不動</b></td></tr>
+      <tr><td><code>LOGIC_THROTTLE_FWD_OUTPUT_MAX</code></td><td class="c">8.29 km/h</td><td><span class="path">s_logic_throttle.h : <b>40</b></span></td>
+          <td>正轉理論上限（實際上限由段位決定，見下）</td></tr>
+      <tr><td><code>LOGIC_THROTTLE_REV_OUTPUT_MAX</code></td><td class="c">2.76 km/h</td><td><span class="path">s_logic_throttle.h : <b>48</b></span></td>
+          <td>反轉上限（固定，不受段位影響）</td></tr>
+    </table>
+
+    <h3>5-1. 段位（Assist Level）對應的最高速</h3>
+    <p><span class="path">src/longwin/s_logic_throttle.h : <b>133~141</b></span></p>
+    <table>
+      <tr><th class="c">段位</th><td class="c">0</td><td class="c">1</td><td class="c">2</td><td class="c">3</td><td class="c">4</td><td class="c">5</td></tr>
+      <tr><th>理論車速</th><td class="c">0</td><td class="c">2.76</td><td class="c">4.15</td><td class="c">5.53</td><td class="c">6.91</td><td class="c">8.29 km/h</td></tr>
+    </table>
+    <div class="note">段位<b>只管最高速，不影響加減速曲線</b>。段位 5 的 8.29 km/h 實機用不完（頂速約 7.2 km/h，受母線電壓限制），多出的餘裕是留給負載與爬坡的扭力頭。</div>
+  </div>
+
+  <!-- ============ 6. 低速端 ============ -->
+  <div class="card">
+    <h2><span class="n">6</span>停車前的低速段（減速表管不到的區域）</h2>
+    <p>命令減到很低之後，實際停止行為由這幾個門檻決定，<b>停車震動或滑行太久要調這裡，不是調減速表</b>。</p>
+    <table>
+      <tr><th>參數</th><th class="c">現值</th><th>位置</th><th>說明</th></tr>
+      <tr><td><code>BrakeStartSpeedPulses</code></td><td class="c">15</td><td><span class="path">main.c : <b>329</b></span></td><td>0.95 km/h 以上才允許回充煞車</td></tr>
+      <tr><td><code>BrakeStopSpeedPulses</code></td><td class="c">7</td><td><span class="path">main.c : <b>330</b></span></td><td>0.44 km/h 以下停止回充煞車</td></tr>
+      <tr><td><code>UVW_LOCK_STOP_PULSES</code></td><td class="c">3</td><td><span class="path">src/userparms.h : <b>263</b></span></td>
+          <td>0.19 km/h 以下啟動三相短路煞停。<b>調太低會拉大「回充停止(0.44)～短路開始」的空窗</b>，鬆油門後會低速滑行才停</td></tr>
+      <tr><td><code>UVW_LOCK_RELEASE_REF</code></td><td class="c">500</td><td><span class="path">src/userparms.h : <b>258</b></span></td><td>油門目標高於 0.35 km/h 才解除短路（遲滯，防來回切換）</td></tr>
+      <tr><td><code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code></td><td class="c">50 ms</td><td><span class="path">s_logic_embraker.h : <b>53</b></span></td>
+          <td>短路生效後多久上電磁煞車。<b>停車還震就加大</b>（給馬達更多時間停），鎖太慢就縮小</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.86rem">Pulses 的單位是「每 100 ms 的霍爾邊緣數」：1 pulse = 33.3 馬達 RPM = 0.063 km/h。</p>
+  </div>
+
+  <!-- ============ 7. VR 模式 ============ -->
+  <div class="card">
+    <h2><span class="n">7</span>VR 旋鈕模式的曲線<span class="tag off">目前未生效</span></h2>
+    <p>VR 與油門互斥：<code>CODESW_VR_ENABLE = !CODESW_THROTTLE_ENABLE</code>，目前油門啟用（<span class="path">src/longwin/codeSw.h : <b>86</b></span>），所以下表<b>不作用</b>。</p>
+    <p>參數位置 <span class="path">src/longwin/s_logic_vr.h : <b>43~68</b></span></p>
+    <table>
+      <tr><th>正轉加速</th><td class="c">{2,4} 0.35</td><td class="c">{3,3} 0.69</td><td class="c">{4,2} 1.38</td><td class="c">{5,1} 3.45 km/h/s</td></tr>
+      <tr><th>正轉減速</th><td class="c">{-4,1} 2.76</td><td class="c">{-3,2} 1.04</td><td class="c">{-3,2} 1.04</td><td class="c">{-4,1} 2.76 km/h/s</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.86rem">格式與油門相同（4 段而非 5 段）。VR 的分段門檻是旋鈕電壓 3300/3800/4300/5000 mV。</p>
+  </div>
+
+  <!-- ============ 8. 流程 ============ -->
+  <div class="card">
+    <h2><span class="n">8</span>調參數的建議流程</h2>
+    <div class="step"><b>① 先決定用哪套機制</b><br>
+      想要「一個數字換整組手感」→ 新機制（<code>CODESW_THROTTLE_ACCEL_FILTER_ENABLE = 1</code>），改 <code>ACCEL_FILTER_CURVE_SELECT</code>。<br>
+      想要「不同油門開度給不同斜率」→ 舊機制（設 0），改 step/time 表。</div>
+    <div class="step"><b>② 一次只改一個數字</b><br>加速與減速分開驗，正轉與反轉分開驗。改完編譯燒錄再上車。</div>
+    <div class="step"><b>③ 用 X2CScope 看波形，不要只憑感覺</b><br>
+      觀測 <code>g_i16ScopeCmdTarget</code>（油門要求的目標，轉油門時是階梯）、
+      <code>g_i16ScopeCmdRateLim</code>（限斜率後，新機制才有）、
+      <code>g_i16ScopeCmdOut</code>（實際送給馬達的命令）。三條疊在一起就能看出斜率與磨圓效果。
+      <div class="note" style="margin-top:10px">X2CScope 的時間軸在通訊忙碌時會被壓縮約 1.4 倍（取樣被跳過）。<b>量絕對時間請一併觀測 <code>g_u16X2cUpdateSkipCount</code></b>，或改用相對比較（例如把斜率設一半，看波形是否剛好變兩倍）。</div>
+    </div>
+    <div class="step"><b>④ 症狀 → 該調哪裡</b>
+      <table style="margin-top:8px">
+        <tr><th style="width:230px">症狀</th><th>調整方向</th></tr>
+        <tr><td>起步太衝 / 太鈍</td><td>新機制：曲線的 <b>R</b> 或 <code>ACCEL_FILTER_CURVE_SELECT</code>；起步瞬間的彈跳感調<b>起始速度</b></td></tr>
+        <tr><td>加速中段感覺不順、有階梯感</td><td>新機制：加大 <b>K</b>（磨圓）。舊機制：檢查是否剛好跨在電壓分段邊界上</td></tr>
+        <tr><td>放油門後停太慢 / 滑行太久</td><td>減速表的 <code>{Step,Time}</code>；若是最後一小段才慢，看第 6 節的低速門檻</td></tr>
+        <tr><td>停車瞬間震動</td><td>加大 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code>，或降低 <code>UVW_LOCK_STOP_PULSES</code></td></tr>
+        <tr><td>放油門時「頓一下」才減速</td><td>減速表第一段的 Step 太大；或油門死區 <code>VOLTAGE_MIN_MV</code> 太高</td></tr>
+        <tr><td>頂速不夠</td><td><b>先量電池電壓</b>。頂速受母線電壓限制（25 V 只到約 7.1 km/h），不是曲線問題，調段位上限無效</td></tr>
+      </table>
+    </div>
+    <div class="danger"><b>燒錄後第一次上車務必先做這三項：</b>平路起步/停止、坡道起步（確認電磁煞車的倒溜保護有動作）、以及低速切換前進/後退。減速與煞車相關的參數改動屬安全項目。</div>
+  </div>
+
+  <!-- ============ 9. 一頁速查 ============ -->
+  <div class="card">
+    <h2><span class="n">9</span>一頁速查：檔案與行號</h2>
+    <table>
+      <tr><th style="width:330px">要改什麼</th><th>檔案 : 行號</th></tr>
+      <tr><td>加速機制總開關</td><td><span class="path">src/longwin/codeSw.h : <b>117</b></span></td></tr>
+      <tr><td>新機制：選曲線 1~5</td><td><span class="path">src/longwin/s_logic_motor.h : <b>112</b></span></td></tr>
+      <tr><td>新機制：5 組曲線的 R / K / 起始速度</td><td><span class="path">src/longwin/s_logic_motor.h : <b>132~139</b></span></td></tr>
+      <tr><td>舊機制：正轉加速 電壓門檻 / 曲線</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>72~75</b> / <b>98~102</b></span></td></tr>
+      <tr><td>舊機制：反轉加速 電壓門檻 / 曲線</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>85~88</b> / <b>114~118</b></span></td></tr>
+      <tr><td>正轉減速 速度門檻 / 曲線</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>78~81</b> / <b>106~110</b></span></td></tr>
+      <tr><td>反轉減速 速度門檻 / 曲線</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>91~94</b> / <b>122~126</b></span></td></tr>
+      <tr><td>故障緊急減速</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>64</b></span></td></tr>
+      <tr><td>油門死區 / 起步速度 / 上限</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>35~48</b></span></td></tr>
+      <tr><td>段位最高速</td><td><span class="path">src/longwin/s_logic_throttle.h : <b>133~141</b></span></td></tr>
+      <tr><td>低速煞停門檻（回充 / 短路）</td><td><span class="path">main.c : <b>329~330</b></span> ・ <span class="path">src/userparms.h : <b>258, 263</b></span></td></tr>
+      <tr><td>電磁煞車上鎖延遲</td><td><span class="path">src/longwin/s_logic_embraker.h : <b>53</b></span></td></tr>
+      <tr><td>VR 模式曲線</td><td><span class="path">src/longwin/s_logic_vr.h : <b>43~68</b></span></td></tr>
+      <tr><td><b>命令刻度（勿動）</b></td><td><span class="path">src/motor_scale.h : <b>40</b></span></td></tr>
+    </table>
+    <div class="note">行號以 2026-07-31 的版本為準；改過檔案後行號會位移，用參數名稱搜尋最可靠。</div>
+  </div>
+
+  <p class="foot">LWFDSPC 速度曲線調參數說明 &nbsp;·&nbsp; 2026-07-31 &nbsp;·&nbsp; 所有數值皆由現行原始碼推算，修改參數後需重新編譯燒錄</p>
+</div>
+</body>
+</html>

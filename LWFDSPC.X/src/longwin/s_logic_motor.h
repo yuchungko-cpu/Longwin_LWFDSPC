@@ -109,7 +109,7 @@ typedef struct
 // 註：協定裡的 eAccelCurve (ID02/ID03 reg 0x09)、u8AccelMs_Ax1~Ax5 (reg 0x0F~0x11) 與
 //   EEPROM 的 u8AccelCurveGroup 目前都只被解碼/回寫，沒有任何控制邏輯讀取，
 //   且其語意未經實機驗證(LCD 送 0 就會落到最緩的曲線 1)，故預設不使用。
-#define ACCEL_FILTER_CURVE_SELECT (3u)  // 1~5，預設 3 = 與原本 step/time 同手感
+#define ACCEL_FILTER_CURVE_SELECT (4u)  // 1~5；曲線 3 = 與原本 step/time 同手感
 
 // 1 = 改由 Modbus 的 eAccelCurve 選 (A0 = 第 1 組)；0 = 用上面的 ACCEL_FILTER_CURVE_SELECT
 #define ACCEL_FILTER_CURVE_FROM_MODBUS (0)
