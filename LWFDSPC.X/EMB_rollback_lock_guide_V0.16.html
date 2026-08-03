@@ -57,6 +57,46 @@
           padding:14px 18px; margin:14px 0; }
   .spec b { color:var(--accent); }
   .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+
+  /* ---- 列印 / PDF：改為淺色版，適合現場列印攜帶 ---- */
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:10pt; line-height:1.45; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    pre { background:#f7f8fa; color:#111; border:1px solid #c8cfd6; font-size:8pt; }
+    .path { background:#fff4c2; color:#4a3200; border:1px solid #d6a400; box-shadow:none; }
+    .path b { color:#8a1c00; }
+    table { font-size:7.8pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.val { color:#7a4b00; }
+    td.loc { color:#0b3d75; }
+    td.f { color:#8a3a00; }
+    tr.hi td { background:#fffbe8 !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .spec { background:#eaf2fb; border-color:#0b5cad; }
+    .step { background:#f5f7fa; }
+    .tag.on { background:#e3f5e6; color:#1a6b28; border-color:#1a7f34; }
+    .tag.off { background:#eeeeee; color:#555; border-color:#bbb; }
+    .lock { color:#c0271a; }
+    .big { color:#8a5a00; }
+    .k { background:#ffd23f; color:#1a1200; }
+    a { color:#0b5cad; }
+    .sub,.legend,.foot { color:#555; }
+  }
 </style>
 </head>
 <body>
@@ -263,7 +303,7 @@
     <p><b>只把 2 秒改小沒有用</b> —— 速度門檻還在，慢速倒溜依然抓不到。改用「連續 N 個反向霍爾邊緣」之後，條件變成純位移，與速度脫鉤，才能寫出「不超過 1/4 車輪」這種可驗證的規格。</p>
   </div>
 
-  <p class="foot">LWFDSPC EMB 倒溜鎖定調參數說明 &nbsp;·&nbsp; 2026-07-31 &nbsp;·&nbsp; 相關文件：EMB_parameters_guide.html（狀態機全貌）、EMB_tuning_guide.html（停車上鎖時機）、speed_profile_tuning_guide.html（加減速曲線）</p>
+  <p class="foot">LWFDSPC EMB 倒溜鎖定調參數說明 &nbsp;·&nbsp; 2026-07-31 &nbsp;·&nbsp; 相關文件：EMB_parameters_guide.html（狀態機全貌）、EMB_tuning_guide.html（停車上鎖時機）、speed_profile_tuning_guide_V0.16.html（加減速曲線）</p>
 </div>
 </body>
 </html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>調機速查表（簡易版）</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1280px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.83rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.82rem; color:#ffd580; word-break:break-all; }
+  td.loc { font-family:Consolas,monospace; font-size:.78rem; color:#cfe3ff; white-space:nowrap; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  .lock { color:var(--bad); font-weight:700; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.82rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.76rem; margin-right:5px; }
+
+  /* ---- 列印 / PDF：改為淺色版，適合現場列印攜帶 ---- */
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:10pt; line-height:1.45; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    pre { background:#f7f8fa; color:#111; border:1px solid #c8cfd6; font-size:8pt; }
+    .path { background:#fff4c2; color:#4a3200; border:1px solid #d6a400; box-shadow:none; }
+    .path b { color:#8a1c00; }
+    table { font-size:7.8pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.val { color:#7a4b00; }
+    td.loc { color:#0b3d75; }
+    td.f { color:#8a3a00; }
+    tr.hi td { background:#fffbe8 !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .spec { background:#eaf2fb; border-color:#0b5cad; }
+    .step { background:#f5f7fa; }
+    .tag.on { background:#e3f5e6; color:#1a6b28; border-color:#1a7f34; }
+    .tag.off { background:#eeeeee; color:#555; border-color:#bbb; }
+    .lock { color:#c0271a; }
+    .big { color:#8a5a00; }
+    .k { background:#ffd23f; color:#1a1200; }
+    a { color:#0b5cad; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>調機速查表（簡易版）</h1>
+  <p class="sub">LWFDSPC V0.16 &nbsp;|&nbsp; 2026-07-31 &nbsp;|&nbsp; 全部為 <code>#define</code>，改完需<b>重新編譯燒錄</b> &nbsp;|&nbsp; 詳細說明見 <code>speed_profile_tuning_guide_V0.16.html</code>、<code>EMB_rollback_lock_guide_V0.16.html</code></p>
+
+  <div class="card">
+    <p class="legend"><b>欄位說明</b>　<b>位置</b>＝檔案:行號（行號會隨改動位移，用參數名搜尋最可靠）
+    <b>範圍</b>＝可安全設定的區間，<span class="lock">紅字</span>為硬限制（超出會編譯失敗或造成錯誤行為）
+    <span class="k">主</span>＝最常調的旋鈕</p>
+    <div class="ok"><b>命令單位換算（看懂所有數字的前提）：</b>1 count = 0.366 馬達 RPM = <b>0.00069 km/h</b>；1500 count = 1.04 km/h（起步速度）；12000 count = 8.29 km/h（段位 5 上限）。實機頂速約 7.2 km/h（受母線電壓限制）。</div>
+  </div>
+
+  <!-- ===== 1 馬達基本參數 ===== -->
+  <div class="card">
+    <h2><span class="n">1</span>馬達與機械基本參數</h2>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>馬達極對數</td><td class="f">MOTOR_POLE_PAIRS</td><td class="loc">src/motor_scale.h : 26</td><td class="val">3</td><td class="c">1~15</td>
+        <td>6 極馬達 = 3 極對。<b>驗證：手轉車輪整整一圈，<code>HallPulses</code> 應累計 6×極對數×齒比 = 365</b>。改錯會讓速度顯示、倒溜位移、所有 pulses 門檻全部偏掉</td></tr>
+      <tr class="hi"><td><span class="k">主</span>減速齒比 ×100</td><td class="f">GEAR_RATIO_X100</td><td class="loc">src/motor_scale.h : 33</td><td class="val">2030</td><td class="c">100~10000</td><td>20.30:1（實測）。馬達轉速 ÷ 車輪轉速</td></tr>
+      <tr><td>輪徑（吋×10）</td><td class="f">LOGIC_MOTOR_DEFAULT_WHEEL_DIMENSION_INCH</td><td class="loc">s_logic_motor.h : 13</td><td class="val">80</td><td class="c">40~200</td><td>8.0 吋。只影響<b>車速顯示</b>，不影響控制</td></tr>
+      <tr><td>馬達轉速上限</td><td class="f">MOTOR_MAX_RPM</td><td class="loc">src/motor_scale.h : 30</td><td class="val">4060</td><td class="c">—</td><td>僅供 sanity check 與文件，<b>不參與運算</b></td></tr>
+      <tr><td>Q15 速度滿刻度</td><td class="f">SPEED_FS_RPM</td><td class="loc">src/motor_scale.h : 40</td><td class="val">12000</td><td class="c"><span class="lock">勿動</span></td>
+        <td><b>整個命令域的刻度。</b>改了會等比改變所有加減速率與速度環 PI 增益，必須全部重算；檔內有 <code>#error</code> 護欄</td></tr>
+      <tr><td>Hall 相序表</td><td class="f">u8MotorHallSequence <span style="color:var(--muted)">(EEPROM)</span></td><td class="loc">s_eeprom.h : 19</td><td class="val">—</td><td class="c">1~12</td><td>換馬達時才動。方向反了另見 <code>CODESW_MOTOR_DIRECTION_DEFAULT</code></td></tr>
+      <tr><td>馬達方向反轉</td><td class="f">CODESW_MOTOR_DIRECTION_DEFAULT</td><td class="loc">codeSw.h : 37</td><td class="val">0</td><td class="c">0 / 1</td><td>0=不變，1=反轉</td></tr>
+      <tr><td>前後開關反轉</td><td class="f">CODESW_IFR_DIRECTION_DEFAULT</td><td class="loc">codeSw.h : 36</td><td class="val">1</td><td class="c">0 / 1</td><td>F/R 開關的極性</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 2 加速 ===== -->
+  <div class="card">
+    <h2><span class="n">2</span>加速</h2>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>加速機制選擇</td><td class="f">CODESW_THROTTLE_ACCEL_FILTER_ENABLE</td><td class="loc">codeSw.h : 117</td><td class="val">1</td><td class="c">0 / 1</td>
+        <td>1 = 濾波曲線（下方 2-1）；0 = 舊 step/time 表（下方 2-2）</td></tr>
+    </table>
+
+    <h3 style="color:var(--accent);font-size:.98rem;margin:16px 0 6px">2-1. 濾波曲線（目前生效）</h3>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>選曲線</td><td class="f">ACCEL_FILTER_CURVE_SELECT</td><td class="loc">s_logic_motor.h : 112</td><td class="val">4</td><td class="c"><span class="lock">1~5</span></td>
+        <td>1=0.69、2=1.04、3=1.38（同舊機制）、4=2.07、5=2.76 km/h/s。超出範圍編譯失敗</td></tr>
+      <tr class="hi"><td><span class="k">主</span>曲線參數表</td><td class="f">ACCEL_FILTER_CURVE_TABLE_INIT<br><span style="color:var(--muted)">{ R, K, 起始速度 }</span></td><td class="loc">s_logic_motor.h : 132~139</td><td class="val">見備註</td><td class="c">R:1~60<br>K:5~10</td>
+        <td><b>R</b>=每 2ms 增加的 count（每 +1 約 +0.35 km/h/s），現 2/3/4/6/8<br><b>K</b>=磨圓程度，τ=2^K×2ms，現全部 7（0.26 s），+1 柔和一倍</td></tr>
+      <tr><td>起始速度</td><td class="f">ACCEL_FILTER_START_CMD_DEFAULT</td><td class="loc">s_logic_motor.h : 124</td><td class="val">1500<br>(1.04 km/h)</td><td class="c">0~OUTPUT_MIN</td><td>一給油門直接跳到此速度。太高有彈出感，太低推不動。<b>每組曲線可各自設定</b></td></tr>
+      <tr><td>更新週期</td><td class="f">ACCEL_FILTER_TICK_MS</td><td class="loc">s_logic_motor.h : 73</td><td class="val">2</td><td class="c">1~10</td><td>改它會<b>等比改變所有曲線</b>，等於整組重調</td></tr>
+      <tr><td>濾波小數位元</td><td class="f">ACCEL_FILTER_FRAC_BITS</td><td class="loc">s_logic_motor.h : 74</td><td class="val">10</td><td class="c"><span class="lock">≥ 8</span></td><td><b>不要調小</b>，太少會讓命令卡在「差一點到不了目標」</td></tr>
+      <tr><td>由 Modbus 選曲線</td><td class="f">ACCEL_FILTER_CURVE_FROM_MODBUS</td><td class="loc">s_logic_motor.h : 115</td><td class="val">0</td><td class="c">0 / 1</td><td>設 1 改吃儀表的 <code>eAccelCurve</code>。<b>協定語意未驗證，儀表送 0 會落到最緩曲線，建議維持 0</b></td></tr>
+    </table>
+
+    <h3 style="color:var(--accent);font-size:.98rem;margin:16px 0 6px">2-2. 舊 step/time 表（目前未生效）</h3>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr><td>正轉電壓分段</td><td class="f">LOGIC_THROTTLE_FWD_ACCEL_V1~V4_MV</td><td class="loc">s_logic_throttle.h : 72~75</td><td class="val">1200 / 2100<br>3000 / 3900</td><td class="c">MIN_MV~MAX_MV<br>須遞增</td>
+        <td><b>V1 目前等於起步門檻，導致最緩的第 0 段碰不到</b>；等比例修正值為 1560/2370/3180/3990</td></tr>
+      <tr><td>正轉加速曲線</td><td class="f">THROTTLE_FWD_ACCEL_STEP_TIME_ENTRY_0~4</td><td class="loc">s_logic_throttle.h : 98~102</td><td class="val">{2,1} {3,2}<br>{4,3} {5,4} {6,4}</td><td class="c">Step 1~127<br>Time <span class="lock">1~127</span></td>
+        <td>加速率 = Step÷Time。1.38 / 1.04 / 0.92 / 0.86 / 1.04 km/h/s。<b>Time 不可為 0</b></td></tr>
+      <tr><td>反轉電壓分段</td><td class="f">LOGIC_THROTTLE_REV_ACCEL_V1~V4_MV</td><td class="loc">s_logic_throttle.h : 85~88</td><td class="val">同正轉</td><td class="c">同上</td><td></td></tr>
+      <tr><td>反轉加速曲線</td><td class="f">THROTTLE_REV_ACCEL_STEP_TIME_ENTRY_0~4</td><td class="loc">s_logic_throttle.h : 114~118</td><td class="val">{1,2} {1,3}<br>{1,3} {2,4} {3,4}</td><td class="c">同上</td><td>0.35 / 0.23 / 0.23 / 0.35 / 0.52 km/h/s（刻意比正轉慢）</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 3 減速 ===== -->
+  <div class="card">
+    <h2><span class="n">3</span>減速（兩種加速機制共用，永遠是 step/time 表）</h2>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>正轉減速曲線</td><td class="f">THROTTLE_FWD_DECEL_STEP_TIME_ENTRY_0~4</td><td class="loc">s_logic_throttle.h : 106~110</td><td class="val">{-25,1} {-30,1}<br>{-35,1} {-40,1}<br>{-40,1}</td><td class="c">Step −1~−127<br>Time <span class="lock">1~127</span></td>
+        <td>17.3 / 20.7 / 24.2 / 27.6 / 27.6 km/h/s，滿速→0 約 0.26~0.42 s。<b>安全項目，改動後務必實車測煞停</b></td></tr>
+      <tr><td>正轉速度分段</td><td class="f">LOGIC_THROTTLE_FWD_DECEL_O1~O4</td><td class="loc">s_logic_throttle.h : 78~81</td><td class="val">2.49 / 3.94<br>5.39 / 6.84 km/h</td><td class="c">0~OUTPUT_MAX<br>須遞增</td>
+        <td>寫成 <code>RPMX10_TO_CMD(13184)</code>，<b>括號內是馬達 RPM×10，改它就好不用自己算 count</b></td></tr>
+      <tr><td>反轉減速曲線</td><td class="f">THROTTLE_REV_DECEL_STEP_TIME_ENTRY_0~4</td><td class="loc">s_logic_throttle.h : 122~126</td><td class="val">{-10,1}…{-22,1}</td><td class="c">同上</td><td>6.9 / 9.0 / 11.1 / 13.1 / 15.2 km/h/s</td></tr>
+      <tr><td>反轉速度分段</td><td class="f">LOGIC_THROTTLE_REV_DECEL_O1~O4</td><td class="loc">s_logic_throttle.h : 91~94</td><td class="val">1.38 / 1.73<br>2.07 / 2.42 km/h</td><td class="c">同上</td><td></td></tr>
+      <tr><td>故障緊急減速</td><td class="f">LOGIC_THROTTLE_FAULT_DECEL_STEP_TIME</td><td class="loc">s_logic_throttle.h : 64</td><td class="val">{-10,1}</td><td class="c">同上</td><td>油門斷線/短路時走這條。6.9 km/h/s，滿速→0 約 1.2 s</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 4 油門與速度上限 ===== -->
+  <div class="card">
+    <h2><span class="n">4</span>油門範圍與速度上限</h2>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>油門起步電壓</td><td class="f">LOGIC_THROTTLE_FWD_VOLTAGE_MIN_MV<br>LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV</td><td class="loc">s_logic_throttle.h : 35, 43</td><td class="val">1200 mV</td><td class="c">300~3000</td>
+        <td>死區。<b>調高可抑制低端誤觸/抖動</b>，代價是要多轉一點。正反轉<b>建議設同值</b></td></tr>
+      <tr><td>油門滿速電壓</td><td class="f">LOGIC_THROTTLE_FWD/REV_VOLTAGE_MAX_MV</td><td class="loc">s_logic_throttle.h : 36, 44</td><td class="val">4800 mV</td><td class="c">MIN+500~5000</td><td>MIN 與 MAX 之間線性對映</td></tr>
+      <tr><td>開機釋放判定</td><td class="f">LOGIC_THROTTLE_POWER_ON_CHECK_MV</td><td class="loc">s_logic_throttle.h : 51~59</td><td class="val">自動<br>(=1200)</td><td class="c"><span class="lock">自動推導</span></td>
+        <td>已改為<b>自動取正反轉起步門檻的較小者</b>。手動寫死會再次出現「不出力卻永久抑制」的死角</td></tr>
+      <tr><td>起步速度</td><td class="f">LOGIC_THROTTLE_FWD/REV_OUTPUT_MIN</td><td class="loc">s_logic_throttle.h : 39, 47</td><td class="val">1.04 km/h</td><td class="c">0~OUTPUT_MAX</td><td>一過死區就跳到此速度</td></tr>
+      <tr><td>正轉上限</td><td class="f">LOGIC_THROTTLE_FWD_OUTPUT_MAX</td><td class="loc">s_logic_throttle.h : 40</td><td class="val">8.29 km/h</td><td class="c">≤ 32767 count</td><td>理論上限，實際由段位決定</td></tr>
+      <tr><td>反轉上限</td><td class="f">LOGIC_THROTTLE_REV_OUTPUT_MAX</td><td class="loc">s_logic_throttle.h : 48</td><td class="val">2.76 km/h</td><td class="c">同上</td><td>固定，<b>不受段位影響</b></td></tr>
+      <tr class="hi"><td><span class="k">主</span>段位最高速</td><td class="f">THROTTLE_ASSIST_LEVEL_MAX_OUTPUT_VALUES</td><td class="loc">s_logic_throttle.h : 133~141</td><td class="val">0 / 2.76 / 4.15<br>5.53 / 6.91 / 8.29</td><td class="c">6 筆，須遞增</td>
+        <td>段位<b>只管最高速，不影響加減速</b>。段位 5 的 8.29 實機用不完（頂速約 7.2）</td></tr>
+      <tr><td>故障電壓範圍</td><td class="f">LOGIC_THROTTLE_FAULT_VOLTAGE_LOW/HIGH_MV</td><td class="loc">s_logic_throttle.h : 54~55</td><td class="val">0 / 5000</td><td class="c">0~5000</td><td>超出即報 A03 並走緊急減速。目前上下限等於全範圍＝實質停用</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 5 倒溜 ===== -->
+  <div class="card">
+    <h2><span class="n">5</span>倒溜鎖定（EMB）</h2>
+    <div class="ok"><b>規格：倒溜量不得超過 1/4 車輪 = 91 個霍爾邊緣 = 159 mm。</b>1 個邊緣 = 車輪 <b>1.75 mm</b>（= 6×極對數×齒比 = 365 邊緣/輪轉）。</div>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>倒溜 pulses<br>（幾個邊緣就鎖）</td><td class="f">EMB_ROLLBACK_REV_EDGES</td><td class="loc">src/userparms.h : 279</td><td class="val">3<br>(5.2 mm)</td><td class="c"><span class="lock">1~91</span></td>
+        <td>N=1→1.7mm、2→3.5、<b>3→5.2</b>、4→7.0、8→14、16→28、45→79、91→159mm(規格上限)。<br><b>上坡起步起不來就加大</b>（給馬達時間建立扭力）。超過 91 編譯失敗</td></tr>
+      <tr><td>啟用偵測的最低命令</td><td class="f">EMB_ROLLBACK_CMD_THRESHOLD</td><td class="loc">src/userparms.h : 278</td><td class="val">500<br>(0.35 km/h)</td><td class="c">100~2000</td><td>低於此值視為無驅動命令→解除武裝（改由 Plan B 處理）</td></tr>
+      <tr><td>F/R 切換抑制窗</td><td class="f">EMB_ROLLBACK_FLIP_HOLDOFF_MS</td><td class="loc">src/userparms.h : 299</td><td class="val">300 ms</td><td class="c">0~2000</td>
+        <td>低速切前後就被鎖→加大。0=停用（可用來確認此防護是否在作用）。<b>由 0 變非零（上坡起步）不受抑制</b></td></tr>
+      <tr><td>附加脈衝閘門</td><td class="f">EMB_ROLLBACK_MIN_PULSES</td><td class="loc">src/userparms.h : 294</td><td class="val">0<br>(停用)</td><td class="c"><span class="lock">建議 0</span></td>
+        <td><b>設非 0 會破壞 1/4 車輪規格</b>：等於加上最低倒溜速度（1→0.063、3→0.189 km/h），更慢的潛行倒溜永不觸發。只在排查誤鎖時暫時使用</td></tr>
+      <tr><td>1/4 車輪護欄</td><td class="f">EMB_ROLLBACK_MAX_EDGES</td><td class="loc">src/userparms.h : 283~287</td><td class="val">91</td><td class="c"><span class="lock">自動推導</span></td><td>由極對數與齒比自動算出，換馬達會跟著變</td></tr>
+    </table>
+    <div class="note"><b>鎖定後只有「鬆油門」能解除</b>，沒有自動解除也沒有計時解除。這是為了避免坡上出現「鎖→放→又倒溜→鎖」的擺動。</div>
+  </div>
+
+  <!-- ===== 6 扭力/電流限制 ===== -->
+  <div class="card">
+    <h2><span class="n">6</span>扭力／電流限制</h2>
+    <div class="danger"><b>⚠ 已知落差（尚未修正）：</b>下表的 ratio 是相對 <code>RATED_CURRENT (50.0f)</code> 計算的，但相電流的實際滿刻度是 <b>Q15 1.0 ↔ 104.6 A</b>，所以<b>實際電流上限是註解聲稱值的 2.09 倍</b>。要按實際安培設定時請用「實際」那一欄。</div>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:90px">現值</th><th style="width:150px">實際電流</th><th>備註</th></tr>
+      <tr class="hi"><td><span class="k">主</span>常溫扭力上限</td><td class="f">LOGIC_TEMP_CONTROLLER_RATIO_NORMAL</td><td class="loc">s_logic_temp_controller.h : 99</td><td class="val">0.33</td><td class="c">註解 16 A<br><b>實際 34.5 A</b></td>
+        <td><b>這就是實際的扭力上限</b>（每 cycle 覆寫速度環的 <code>outMax</code>）。爬坡無力就加大，過熱/過流就縮小</td></tr>
+      <tr><td>降溫第 1~5 級</td><td class="f">LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_1~5</td><td class="loc">s_logic_temp_controller.h : 100~104</td><td class="val">0.31 / 0.29<br>0.271 / 0.253<br>0.234</td><td class="c">實際 32.4 / 30.3<br>28.3 / 26.5 / 24.5 A</td><td>控制器溫度上升時逐級降扭力。<b>須單調遞減</b></td></tr>
+      <tr><td>過溫斷力</td><td class="f">LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP</td><td class="loc">s_logic_temp_controller.h : 105</td><td class="val">0.0</td><td class="c">0 A</td><td>完全斷力</td></tr>
+      <tr><td>額定電流（換算基準）</td><td class="f">RATED_CURRENT</td><td class="loc">codeSw.h : 16</td><td class="val">50.0f</td><td class="c">—</td><td>只是 ratio 的換算基準，<b>不是真正的保護值</b></td></tr>
+      <tr><td>速度環輸出硬上限</td><td class="f">SPEEDCNTR_OUTMAX</td><td class="loc">src/userparms.h : 215</td><td class="val">Q15(0.5)</td><td class="c">52.3 A</td><td>PI 輸出的絕對上限，正常由上面的 ratio 覆寫</td></tr>
+      <tr><td>堵轉後降流</td><td class="f">MOTOR_STALL_CURRENT_LIMIT_PERCENT</td><td class="loc">src/userparms.h : 252</td><td class="val">50 %</td><td class="c">當前上限的一半</td><td>堵轉 8 秒後把電流上限打對折</td></tr>
+      <tr><td>相電流刻度</td><td class="f">IABC_COUNTS_PER_AMP_X100</td><td class="loc">src/userparms.h : 156</td><td class="val">31330<br>(313.3/A)</td><td class="c"><span class="lock">自動推導</span></td>
+        <td>由分流電阻 <code>R_SHUNT_Ohm</code>(125)、運放增益 <code>CURRENT_GAIN_OPAMP</code>(126)、<code>MEASCURR_NET_GAIN</code>(153) 推導。<b>只在換硬體時改前兩者，不要直接改此值</b></td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 7 停車與堵轉 ===== -->
+  <div class="card">
+    <h2><span class="n">7</span>停車行為與堵轉保護</h2>
+    <table>
+      <tr><th style="width:150px">功能</th><th style="width:230px">參數名</th><th style="width:200px">位置</th><th style="width:80px">現值</th><th style="width:140px">範圍</th><th>備註</th></tr>
+      <tr><td>回充煞車 起煞</td><td class="f">BrakeStartSpeedPulses</td><td class="loc">main.c : 329</td><td class="val">15<br>(0.95 km/h)</td><td class="c">&gt; StopPulses</td><td rowspan="2">單位＝每 100ms 霍爾邊緣數。<b>1 pulse = 33.3 馬達 RPM = 0.063 km/h</b></td></tr>
+      <tr><td>回充煞車 停煞</td><td class="f">BrakeStopSpeedPulses</td><td class="loc">main.c : 330</td><td class="val">7<br>(0.44 km/h)</td><td class="c">&gt; UVW_LOCK_STOP</td></tr>
+      <tr class="hi"><td><span class="k">主</span>三相短路煞停</td><td class="f">UVW_LOCK_STOP_PULSES</td><td class="loc">src/userparms.h : 263</td><td class="val">3<br>(0.19 km/h)</td><td class="c">1~7</td>
+        <td><b>調太低會拉大「回充停(0.44)～短路開始」的空窗</b>，鬆油門後會低速滑行才停</td></tr>
+      <tr><td>短路解除門檻</td><td class="f">UVW_LOCK_RELEASE_REF</td><td class="loc">src/userparms.h : 258</td><td class="val">500<br>(0.35 km/h)</td><td class="c">300~1500</td><td>遲滯，防來回切換</td></tr>
+      <tr class="hi"><td><span class="k">主</span>EMB 上鎖延遲</td><td class="f">EMBRAKER_SHORT_TO_LOCK_DELAY_MS</td><td class="loc">s_logic_embraker.h : 53</td><td class="val">50 ms</td><td class="c">0~1000</td><td><b>停車還震就加大</b>（給馬達更多時間停），鎖太慢就縮小</td></tr>
+      <tr><td>EMB 逾時保命鎖</td><td class="f">EMBRAKER_LOCK_TIMEOUT_MS</td><td class="loc">s_logic_embraker.h : 54</td><td class="val">3000 ms</td><td class="c">1000~10000</td><td>霍爾異常使短路從未生效時的最後保險</td></tr>
+      <tr><td>堵轉判定 速度/命令</td><td class="f">MOTOR_STALL_SPEED_THRESHOLD<br>MOTOR_STALL_COMMAND_THRESHOLD</td><td class="loc">src/userparms.h : 247, 246</td><td class="val">0.68 km/h<br>0.69 km/h</td><td class="c">—</td><td>有命令卻幾乎不動＝堵轉</td></tr>
+      <tr><td>堵轉 降流/斷力 時間</td><td class="f">MOTOR_STALL_CURRENT_LIMIT_CNTR<br>MOTOR_STALL_LOCK_CNTR</td><td class="loc">src/userparms.h : 250, 251</td><td class="val">400 (8 s)<br>3000 (60 s)</td><td class="c">單位 20 ms</td><td>8 秒降流、60 秒斷力並閂鎖</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 8 常見症狀 ===== -->
+  <div class="card">
+    <h2><span class="n">8</span>常見症狀 → 先調哪個</h2>
+    <table>
+      <tr><th style="width:290px">症狀</th><th>先調這個</th></tr>
+      <tr><td>起步太衝 / 太鈍</td><td><code>ACCEL_FILTER_CURVE_SELECT</code>（1~5）</td></tr>
+      <tr><td>起步瞬間「彈一下」</td><td><code>ACCEL_FILTER_START_CMD_DEFAULT</code> 調低</td></tr>
+      <tr><td>加速有階梯感 / 不順</td><td>曲線表的 <b>K</b> 加大（磨圓）</td></tr>
+      <tr><td>上坡無力、爬不動</td><td><code>LOGIC_TEMP_CONTROLLER_RATIO_NORMAL</code> 加大（注意實際安培是 ratio×104.6）</td></tr>
+      <tr><td>上坡起步一給油門就被鎖</td><td><code>EMB_ROLLBACK_REV_EDGES</code> 加大（3 → 8 = 允許 1.4 cm）</td></tr>
+      <tr><td>倒溜太多才鎖</td><td><code>EMB_ROLLBACK_REV_EDGES</code> 縮小</td></tr>
+      <tr><td>低速切前後就被鎖</td><td><code>EMB_ROLLBACK_FLIP_HOLDOFF_MS</code> 加大</td></tr>
+      <tr><td>放油門後滑行太久才停</td><td>減速表 Step 加大；最後一小段慢則看 <code>UVW_LOCK_STOP_PULSES</code></td></tr>
+      <tr><td>停車瞬間震動</td><td><code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 加大</td></tr>
+      <tr><td>速度顯示不準</td><td><code>MOTOR_POLE_PAIRS</code>、<code>GEAR_RATIO_X100</code>、輪徑。<b>先用「轉一圈 = 365 邊緣」驗證</b></td></tr>
+      <tr><td>頂速不夠</td><td><b>先量電池電壓</b>（25 V 只到約 7.1 km/h）。調段位上限無效</td></tr>
+      <tr><td>電流顯示不對</td><td>檢查分流電阻與運放增益（<code>R_SHUNT_Ohm</code> / <code>CURRENT_GAIN_OPAMP</code>），<b>不要直接改 counts/A</b></td></tr>
+    </table>
+    <div class="danger"><b>燒錄後第一次上車必測：</b>平路起步/停止 → 坡道起步（確認倒溜保護動作）→ 低速切前後 → 全速煞停。<b>減速與煞車相關參數屬安全項目。</b></div>
+  </div>
+
+  <p class="foot">LWFDSPC 調機速查表（簡易版）&nbsp;·&nbsp; V0.16 / 2026-07-31 &nbsp;·&nbsp; 詳細原理與測試程序見 speed_profile_tuning_guide_V0.16.html、EMB_rollback_lock_guide_V0.16.html、EMB_parameters_guide.html</p>
+</div>
+</body>
+</html>
