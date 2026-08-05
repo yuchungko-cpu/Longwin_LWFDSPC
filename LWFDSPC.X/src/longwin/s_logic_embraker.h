@@ -64,7 +64,7 @@ typedef enum {
  * @brief 初始化電磁煞車模組
  * @note 應在系統啟動時呼叫。此函式不直接存取硬體。
  * @param u16IembMv IEMB 腳位的初始電壓值 (mV)
- * @return bool true: 初始化成功 / false: 檢測到煞車故障 (A19)
+ * @return bool true: 初始化成功 / false: 檢測到煞車故障 (A04)
  */
 bool logic_embraker_init(uint16_t u16IembMv);
 

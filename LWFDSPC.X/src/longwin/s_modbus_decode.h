@@ -106,7 +106,7 @@ typedef struct
         bool bBatteryLowVoltage : 1;
         bool bBrakeStuck : 1;
         bool bThrottleStuck : 1;
-        bool bEmbSensorFault : 1;            // D4, A19
+        bool bEmbSensorFault : 1;            // D4, A04
         bool bMotorOverload : 1;
         bool bControllerOverTemp : 1;
         bool bMotorOrControllerError : 1;

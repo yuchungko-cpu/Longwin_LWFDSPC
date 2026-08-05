@@ -22,11 +22,11 @@ typedef enum {
   // 煞車相關 (Brake System)
   LOGIC_ALARM_A02_BRAKE_SWITCH_FAULT, // 一般煞車開關異常
                                       // (IBKS，例如開機時為低電位)
-  LOGIC_ALARM_A19_EMB_SENSOR_FAULT,   // 電磁煞車感測器異常 (Embarker
+  LOGIC_ALARM_A04_EMB_SENSOR_FAULT,   // 電磁煞車感測器異常 (Embarker
                                     // Sensor，例如開機時電壓超出範圍)
 
   // 馬達相關 (Motor)
-  LOGIC_ALARM_A04_MOTOR_HALL_FAULT,    // 馬達霍爾信號異常 (運行時檢測)
+  LOGIC_ALARM_A19_MOTOR_HALL_FAULT,    // 馬達霍爾信號異常 (運行時檢測)
   LOGIC_ALARM_A05_MOTOR_OVERCURRENT,   // 馬達電流過大
   LOGIC_ALARM_A06_MOTOR_STALL,         // 馬達堵轉
   LOGIC_ALARM_A07_MOTOR_SHORT_CIRCUIT, // 馬達短路 (MOSFET 短路，控制器硬體故障)

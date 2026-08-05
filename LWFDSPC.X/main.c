@@ -414,7 +414,7 @@ static uint8_t get_flash_count_for_alarm(E_LOGIC_ALARM_CODE_T alarm) {
             return 2;  // A02
         case LOGIC_ALARM_A03_THROTTLE_FAULT:
             return 13;  // A03
-        case LOGIC_ALARM_A04_MOTOR_HALL_FAULT:
+        case LOGIC_ALARM_A19_MOTOR_HALL_FAULT:
             return 6;  // Doc: A07
         case LOGIC_ALARM_A05_MOTOR_OVERCURRENT:
             return 7;  // Doc: A09
@@ -424,8 +424,8 @@ static uint8_t get_flash_count_for_alarm(E_LOGIC_ALARM_CODE_T alarm) {
             return 16;  // A14
         case LOGIC_ALARM_A15_BATTERY_OVER_VOLTAGE:
             return 15;  // A15
-        case LOGIC_ALARM_A19_EMB_SENSOR_FAULT:
-            return 17;  // A19
+        case LOGIC_ALARM_A04_EMB_SENSOR_FAULT:
+            return 17;  // was A19's flash count -- TODO confirm correct LED flash count for A04
         case LOGIC_ALARM_A20_MOTOR_OVER_TEMP:
             return 18;  // A20
         default:
@@ -1305,12 +1305,12 @@ int main(void) {
             g_stSystemData.sSharedData.errors.bMotorOrControllerError = (logic_errorHandler_isAlarmActive(LOGIC_ALARM_A07_MOTOR_SHORT_CIRCUIT) ||
                                                                          logic_errorHandler_isAlarmActive(LOGIC_ALARM_A08_MOTOR_PHASE_LOSS) ||
                                                                          logic_errorHandler_isAlarmActive(LOGIC_ALARM_A12_CONTROLLER_HW_FAULT));
-            g_stSystemData.sSharedData.errors.bMotorSensorError = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A04_MOTOR_HALL_FAULT);
+            g_stSystemData.sSharedData.errors.bMotorSensorError = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A19_MOTOR_HALL_FAULT);
             g_stSystemData.sSharedData.errors.bBrakeSignalError = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A02_BRAKE_SWITCH_FAULT);
             g_stSystemData.sSharedData.errors.bBrakeStuck = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A02_BRAKE_SWITCH_FAULT);  // Also map stuck to switch fault
             g_stSystemData.sSharedData.errors.bLsnError = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A14_LSN_FAULT);
             g_stSystemData.sSharedData.errors.bCommLcdError = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A10_CONTROLLER_COMM_TIMEOUT);
-            g_stSystemData.sSharedData.errors.bEmbSensorFault = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A19_EMB_SENSOR_FAULT);
+            g_stSystemData.sSharedData.errors.bEmbSensorFault = logic_errorHandler_isAlarmActive(LOGIC_ALARM_A04_EMB_SENSOR_FAULT);
 #endif
             // Note: bCommBatteryError, bCommGuiError, bCommAppError have no direct mapping in E_LOGIC_ALARM_CODE_T
             // --- End of Modbus Error Flag Update ---

@@ -45,10 +45,10 @@ bool logic_embraker_init(uint16_t u16IembMv) {
     // 檢查初始故障狀態
     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
         s_eCurrentState = EMBRAKER_STATE_FAULT;
-        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, true);
+        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, true);
         return false;  // 初始化失敗
     }
-    logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, false);
+    logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, false);
 
     // 初始化為鎖定狀態
     s_eCurrentState = EMBRAKER_STATE_LOCKED;
@@ -73,7 +73,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
     if (s_eCurrentState == EMBRAKER_STATE_FAULT) {
         if (u16IembMv >= EMBRAKER_FAULT_THRESHOLD_MV) {
             // 電壓恢復，轉移到LOCKED狀態以便下次重新檢查
-            logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, false);
+            logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, false);
             eNextState = EMBRAKER_STATE_LOCKED;
         } else {
             // 仍處於故障，保持鎖定
@@ -110,7 +110,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     // 收到運轉指令，現在檢查IEMB
                     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
                         // 運轉前檢查失敗，進入故障狀態
-                        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, true);
+                        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, true);
                         eNextState = EMBRAKER_STATE_FAULT;
                         eAction = EMBRAKER_ACTION_LOCK;
                     } else {

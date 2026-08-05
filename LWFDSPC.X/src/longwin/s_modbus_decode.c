@@ -259,6 +259,7 @@ void modbusDecode_encodeLcdSettings(U_MODBUS_LCD_APP_DATA *pDest,
                          (pSrc->errors.bBatteryLowVoltage << 1) |
                          (pSrc->errors.bBrakeStuck << 2) |
                          (pSrc->errors.bThrottleStuck << 3) |
+                         (pSrc->errors.bEmbSensorFault << 4) |
                          (pSrc->errors.bMotorOverload << 5) |
                          (pSrc->errors.bControllerOverTemp << 6) |
                          (pSrc->errors.bMotorOrControllerError << 7) |
@@ -268,7 +269,7 @@ void modbusDecode_encodeLcdSettings(U_MODBUS_LCD_APP_DATA *pDest,
                          (pSrc->errors.bCommBatteryError << 12) |
                          (pSrc->errors.bCommLcdError << 13) |
                          (pSrc->errors.bCommGuiError << 14) |
-                         ((pSrc->errors.bCommAppError || pSrc->errors.bEmbSensorFault) << 15); // Bit 15 represents CommAppError or EmbSensorFault (A19)
+                         ((pSrc->errors.bCommAppError || pSrc->errors.bMotorSensorError) << 15); // Bit 15 represents CommAppError or EmbSensorFault (A04)
     pDest->u16Regs[0x06] = u16Errors;
     // ------------------------------------------------------------
     if (u8Update & 0x01)
