@@ -209,8 +209,8 @@ minimum value accepted */
 #define SPEEDCNTR_CTERM Q15(0.999)
 #define SPEEDCNTR_OUTMAX Q15(0.175)  //~Hardware: 13.2A peak, 10mR
 #else
-#define SPEEDCNTR_PTERM 3000
-#define SPEEDCNTR_ITERM 10
+#define SPEEDCNTR_PTERM 5000
+#define SPEEDCNTR_ITERM 20
 #define SPEEDCNTR_CTERM Q15(0.999)
 #define SPEEDCNTR_OUTMAX Q15(0.5)  //~Hardware: 13.2A peak, 10mR  0.175
 #endif
@@ -260,7 +260,7 @@ minimum value accepted */
 // 換算 (18 邊緣/機械轉, 齒比 20.3)：1 pulse/100ms = 33.3 馬達RPM = 0.063 km/h
 //   → 3 pulses = 100 馬達RPM = 0.19 km/h  (舊註解「7≈馬達58RPM, 極對數12」已失效)
 // 獨立於 ReGen 的 BrakeStopSpeedPulses，調此值不影響 ReGen 起煞點。
-#define UVW_LOCK_STOP_PULSES 3
+#define UVW_LOCK_STOP_PULSES 15
 
 // =============================================================================
 //  有動力倒溜/倒衝偵測 (命令一個方向、車實際往反方向動 → EMB 立即鎖定)
@@ -275,8 +275,8 @@ minimum value accepted */
 //      N=3  →   5.2 mm (1/122 輪)      N=16 →  28.0 mm (1/23 輪)
 //      N=4  →   7.0 mm (1/91  輪)      N=45 →  78.6 mm (1/8  輪)
 //      N=8  →  14.0 mm (1/46  輪)      N=91 → 159.0 mm (1/4  輪 ← 規格上限)
-#define EMB_ROLLBACK_CMD_THRESHOLD 500  // |inReference| 需 >= 此值才啟用偵測；183 馬達RPM = 0.35 km/h
-#define EMB_ROLLBACK_REV_EDGES 3        // 連續反向霍爾邊緣門檻 → 立即鎖定。3 = 倒退 5.2 mm
+#define EMB_ROLLBACK_CMD_THRESHOLD 100  // |inReference| 需 >= 此值才啟用偵測；183 馬達RPM = 0.35 km/h
+#define EMB_ROLLBACK_REV_EDGES 90        // 連續反向霍爾邊緣門檻 → 立即鎖定。3 = 倒退 5.2 mm
                                         //   太靈敏(誤鎖)就加大，太遲鈍就縮小；上限見下方護欄
 
 // 每輪轉的霍爾邊緣數與 1/4 車輪上限 (由 motor_scale.h 的參數推導，改齒比/極對數會自動跟著變)
