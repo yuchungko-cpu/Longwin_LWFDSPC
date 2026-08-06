@@ -238,9 +238,10 @@ uint16_t TMRLatch = 30000;
 signed int HallPulses = 0;
 signed int HallPulsesLatch = 0;
 unsigned int HallPulsesCntr = 0;
-// [有動力倒溜] 連續「與命令方向相反」的霍爾邊緣數。CNRead_Inline (50us ISR) 累加/清零，
-// 20ms 的 EMB 任務讀取；8-bit 存取在 16-bit MCU 上為原子，不需臨界區。
+// [有動力倒溜] 與命令方向相反的「淨」霍爾邊緣數。CNRead_Inline (50us ISR) 反向 +1 / 正向 -1
+// (地板 0)，20ms 的 EMB 任務讀取；8-bit 存取在 16-bit MCU 上為原子，不需臨界區。
 // 1 邊緣 = 車輪 1.75 mm，門檻見 userparms.h 的 EMB_ROLLBACK_REV_EDGES。
+// ⚠ 只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE 動作處必須清零(見該處註解)。
 volatile uint8_t g_u8EmbRevEdgeCnt = 0;
 const int16_t PhaseValues[8] = {0, 0, -21844, -10922, 21844, 10922, 32767, 0};
 signed int TempVar;     // main loop
@@ -1415,15 +1416,25 @@ int main(void) {
 #endif
 
                 // 根據回傳的指令控制硬體
+                //
+                // [必要] 兩個分支都要清零 g_u8EmbRevEdgeCnt。該計數器只在霍爾邊緣中斷內更新
+                //   (整段包在 OldHallState != HallState 裡)，車被煞車夾住不動時**完全不會執行**,
+                //   連「命令歸零 → 解除武裝歸零」的分支也不會跑 → 計數凍結在 >= 門檻。若不在此
+                //   清零：鎖定→鬆油門解閂→重新給油門→RELEASE→下一個 20ms tick 因計數仍達門檻而
+                //   立刻重鎖，車一個邊緣都沒動就被鎖死，而要扣掉計數又必須讓車動 → 卡死。
+                //   LOCK 清零 = 偵測已被執行，位移預算用掉;RELEASE 清零 = 每次放煞車都從零起算。
+                //   8-bit 寫入在 16-bit MCU 上為原子,且是單純覆寫(非讀改寫),與 ISR 無競態。
                 switch (eBrakeAction) {
                     case EMBRAKER_ACTION_LOCK:
 #if !CODESW_MOTOR_LOCK_TEST_ENABLE
                         MotorStallForceOutputZero();
 #endif
                         O_EM_BRAKE_CTRL_LAT = 0;  // 鎖定 (輸出LOW)
+                        g_u8EmbRevEdgeCnt = 0;
                         break;
                     case EMBRAKER_ACTION_RELEASE:
                         O_EM_BRAKE_CTRL_LAT = 1;  // 釋放 (輸出HI)
+                        g_u8EmbRevEdgeCnt = 0;
                         break;
                     case EMBRAKER_ACTION_NONE:
                     default:
@@ -2817,12 +2828,18 @@ void DoControl(void) {
             //==============================================================================
             HallPulses++;
 
-            // --- [有動力倒溜] 連續反向霍爾邊緣計數 (供 EMB 立即鎖定) ---
-            //   每個邊緣比對「滾動方向」與「命令方向」，連續反向達門檻即視為倒溜。
+            // --- [有動力倒溜] 反向霍爾邊緣「淨」計數 (供 EMB 立即鎖定) ---
+            //   每個邊緣比對「滾動方向」與「命令方向」：反向 +1、正向 -1 (地板 0)。
             //   符號慣例沿用上面那行：Direction == DirectionDefault ⇒ Speed 取負 ⇒ 往負方向滾。
             //   用邊緣「計數」而非速度，是為了讓偵測與速度無關 —— 再慢的潛行倒溜也會在固定
             //   位移(1 邊緣 = 車輪 1.75 mm)內被抓到，才能保證「不超過 1/4 車輪」的規格。
-            //   靜止抖動時方向會交替，下面的 else 分支會把計數清零，故自動免疫。
+            //
+            //   為何用「淨」而非「連續」：規格管的是淨倒溜位移，而連續計數只能界定單調位移。
+            //   上坡與重力拉鋸時 (倒溜→積分器充飽→推前一小段→再倒溜)，連續計數每次都被歸零，
+            //   淨位移卻早已超過 1/4 車輪 → 永遠不鎖。正向抵扣可讓拉鋸下的計數仍單調爬到門檻。
+            //   地板取 0 而不讓它變負，是為了不讓長距離正常前進「預存額度」而延誤後續偵測。
+            //   靜止抖動時方向交替 → 正負相抵停在 0 附近，故仍自動免疫。
+            //   註：門檻小時 (如 N=3) 本式與舊的連續計數行為幾乎相同；差異只在門檻放大後顯現。
             {
                 signed int i16EmbCmdRef = piInputOmega.inReference;
                 if ((i16EmbCmdRef > EMB_ROLLBACK_CMD_THRESHOLD) ||
@@ -2833,8 +2850,8 @@ void DoControl(void) {
                         if (g_u8EmbRevEdgeCnt < 255u) {
                             g_u8EmbRevEdgeCnt++;
                         }
-                    } else {
-                        g_u8EmbRevEdgeCnt = 0;  // 方向一致 → 清零
+                    } else if (g_u8EmbRevEdgeCnt > 0u) {
+                        g_u8EmbRevEdgeCnt--;  // 方向一致 → 抵扣一個邊緣的倒溜位移
                     }
                 } else {
                     // 無有效驅動命令 → 解除武裝 (無動力倒溜由 WAITING_TO_LOCK 的 Plan B 處理)

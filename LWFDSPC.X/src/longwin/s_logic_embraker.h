@@ -45,8 +45,9 @@ typedef enum {
 //  (4) [有動力倒溜] RELEASED 與 WAITING_TO_LOCK 兩個狀態下,偵測到「命令一個方向、車卻往
 //      反方向動」→ **立即**鎖定並閂鎖至鬆油門。涵蓋陡坡上有動力卻被重力拉著反向、尚未近停
 //      (UVW lock/Plan B 到不了)的情形。規格:倒溜量不得超過 1/4 車輪(91 個霍爾邊緣 / 159 mm)。
-//      偵測訊號由 main.c 的 CNRead_Inline 以「連續 N 個與命令方向相反的霍爾邊緣」
-//      (g_u8EmbRevEdgeCnt >= EMB_ROLLBACK_REV_EDGES) 產生後以 bRollbackDetected 傳入 ——
+//      偵測訊號由 main.c 的 CNRead_Inline 以「與命令方向相反的淨霍爾邊緣數」(反向 +1、
+//      正向 -1、地板 0) (g_u8EmbRevEdgeCnt >= EMB_ROLLBACK_REV_EDGES) 產生後以
+//      bRollbackDetected 傳入 ——
 //      用邊緣計數而非速度,是因為 N 個邊緣等於固定的車輪位移(1 邊緣 = 1.75 mm),與速度無關,
 //      再慢的潛行倒溜也會在規格內被攔下(舊版靠 0.45 km/h 速度門檻 + 2 秒計時,慢速倒溜
 //      永遠不觸發、快速倒溜也已滑行數十公分)。門檻與抑制窗見 userparms.h。

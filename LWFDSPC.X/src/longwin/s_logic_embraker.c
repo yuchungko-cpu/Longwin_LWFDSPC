@@ -129,8 +129,8 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     s_bUvwLockTiming = false;   // 重置 UVW lock 延遲計時
                     s_bFailsafeTiming = false;  // 重置 failsafe 計時 (改為命令歸零後才起算)
                 } else if (bRollbackDetected) {
-                    // [有動力倒溜] 偵測到即鎖 —— 不計時。偵測訊號是「連續 N 個與命令方向相反的
-                    //   霍爾邊緣」(main.c 的 g_u8EmbRevEdgeCnt)，N 個邊緣就是固定的車輪位移
+                    // [有動力倒溜] 偵測到即鎖 —— 不計時。偵測訊號是「與命令方向相反的淨霍爾邊緣
+                    //   數達 N」(main.c 的 g_u8EmbRevEdgeCnt)，N 個邊緣就是固定的車輪位移
                     //   (1 邊緣 = 1.75 mm)，與速度無關，故慢速潛行倒溜也會在規格內的位移被攔下。
                     //   鎖定後閂鎖至鬆油門(避免坡上仍有油門時被 LOCKED 的運轉前檢查放開又倒溜)。
                     //   馬達斷力由 main.c 在 LOCK 動作時呼叫 MotorStallForceOutputZero() 處理。
