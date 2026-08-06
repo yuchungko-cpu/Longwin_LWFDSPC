@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LW_Jeff 合併後：參數變更對照與待決事項</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1320px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; min-width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; padding:0 6px; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:6px;
+        padding:9px 12px; overflow-x:auto; font-family:Consolas,monospace; font-size:.8rem; margin:8px 0; }
+  ul { margin:6px 0 0; padding-left:20px; font-size:.86rem; }
+  li { margin:3px 0; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.83rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.8rem; color:#ffd580; word-break:break-all; }
+  td.loc { font-family:Consolas,monospace; font-size:.76rem; color:#cfe3ff; white-space:nowrap; }
+  td.old { text-align:center; white-space:nowrap; font-weight:700; color:#9fb0c0; }
+  td.new { text-align:center; white-space:nowrap; font-weight:800; color:#ffe082; }
+  td.id { text-align:center; white-space:nowrap; font-weight:800; color:var(--accent); }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.bad td { background:rgba(248,81,73,.07); }
+  .lock { color:var(--bad); font-weight:700; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.82rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .p { display:inline-block; border-radius:4px; padding:0 6px; font-weight:800;
+       font-size:.76rem; white-space:nowrap; }
+  .p.hi { background:#6e1f1a; color:#ffd3ce; }
+  .p.md { background:#6b5210; color:#ffe9ad; }
+  .p.lo { background:#2b3948; color:#b9c8d6; }
+
+  @media print {
+    @page { size:A4 landscape; margin:10mm 9mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:9.5pt; line-height:1.42; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    pre { background:#f7f8fa; color:#111; border:1px solid #c8cfd6; font-size:8pt; }
+    table { font-size:7.6pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.old { color:#666; }
+    td.new { color:#7a4b00; }
+    td.loc { color:#0b3d75; }
+    td.f { color:#8a3a00; }
+    td.id { color:#0b5cad; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.bad td { background:#ffefec !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .lock { color:#c0271a; }
+    .p.hi { background:#ffdad4 !important; color:#8f1f16 !important; }
+    .p.md { background:#fff0c9 !important; color:#7a5200 !important; }
+    .p.lo { background:#eceff2 !important; color:#444 !important; }
+    a { color:#0b5cad; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LW_Jeff 合併後：參數變更對照與待決事項</h1>
+  <p class="sub">2026-08-06 &nbsp;|&nbsp; 合併 commit <code>7f400cd</code>（<code>main</code> ← <code>origin/LW_Jeff</code>，零衝突）&nbsp;|&nbsp; 基準 <code>77b9905</code> (tag v0.16) &nbsp;|&nbsp; <b>所有 #define 依指示維持 LW_Jeff 原值，未做任何回調</b></p>
+
+  <div class="card">
+    <p class="legend"><b>命令單位換算（看懂所有數字的前提）</b>　1 count = 0.366 馬達 RPM = <b>0.00069 km/h</b>　·　1 霍爾邊緣 = 車輪 <b>1.75 mm</b>　·　1 pulse/100ms = 33.3 馬達 RPM = <b>0.063 km/h</b>　·　油門最低有效輸出 <code>OUTPUT_MIN</code> = 1501 counts = 1.04 km/h</p>
+    <div class="ok"><b>本次合併同時帶入 3 處程式碼改動（非 #define，已確認正確或已列入表 2）：</b>
+      <ul>
+        <li><b>C1</b> <code>s_logic_embraker.c:150-161</code>　<code>WAITING_TO_LOCK</code> 新增 <code>bRollbackDetected</code> 分支（+12 行）。修的是「鬆油門後 140~460 ms 空窗期倒溜訊號沒人接、只能掉到 3 s failsafe」。<b>已確認正確</b></li>
+        <li><b>C2</b> <code>s_modbus_decode.c:262</code>　LCD 錯誤暫存器 <code>bit4</code> 補上 <code>bEmbSensorFault</code>（原本從未寫入）。<b>已確認正確</b></li>
+        <li><b>C3</b> <code>s_modbus_decode.c:272</code>　<code>bit15</code> 來源改為 <code>bMotorSensorError</code>。<b>有問題 → 見表 2 第 4 項</b></li>
+      </ul>
+      另有 A04 / A19 告警 enum 改名共 8 處，因列舉序位未動，<b>編譯結果完全相同、零行為變化</b>。
+    </div>
+  </div>
+
+  <!-- ================= TABLE 1 ================= -->
+  <div class="card">
+    <h2><span class="n">表 1</span>參數變更對照（原值 → 現值）</h2>
+    <table>
+      <tr>
+        <th style="width:36px">#</th>
+        <th style="width:240px">參數</th>
+        <th style="width:190px">位置</th>
+        <th style="width:62px">原值</th>
+        <th style="width:62px">現值</th>
+        <th style="width:250px">物理換算</th>
+        <th>影響與必測項目</th>
+      </tr>
+      <tr class="hi">
+        <td class="id">1</td>
+        <td class="f">ACCEL_FILTER_CURVE_SELECT</td>
+        <td class="loc">s_logic_motor.h : 112</td>
+        <td class="old">4u</td>
+        <td class="new">5u</td>
+        <td>限斜率 R 6 → 8 counts/tick<br>加速率 2.07 → <b>2.76 km/h/s</b><br>到達時間 4.0 → 3.2 s<br>等斜率段落後 0.53 → 0.70 km/h</td>
+        <td>起步更猛。τ 未動（K=7, 256 ms），<b>圓角軟度不變</b>。必測：轉油門是否衝、平路起步是否頓</td></tr>
+      <tr class="hi">
+        <td class="id">2</td>
+        <td class="f">SPEEDCNTR_PTERM</td>
+        <td class="loc">src/userparms.h : 212</td>
+        <td class="old">3000</td>
+        <td class="new">5000</td>
+        <td>速度環 P，<b>+67%</b></td>
+        <td>讓實際速度追得上更陡的命令（與 #1 配套）。必測：定速是否振盪、有無異音</td></tr>
+      <tr class="hi">
+        <td class="id">3</td>
+        <td class="f">SPEEDCNTR_ITERM</td>
+        <td class="loc">src/userparms.h : 213</td>
+        <td class="old">10</td>
+        <td class="new">20</td>
+        <td>速度環 I，<b>×2</b></td>
+        <td>上坡起步扭力建立更快。必測：<b>鬆油門 creep</b>（積分器殘留造成微速前進）是否惡化</td></tr>
+      <tr class="hi">
+        <td class="id">4</td>
+        <td class="f">UVW_LOCK_STOP_PULSES</td>
+        <td class="loc">src/userparms.h : 263</td>
+        <td class="old">3</td>
+        <td class="new">15</td>
+        <td>「接近靜止」門檻<br>0.19 → <b>0.94 km/h</b></td>
+        <td><b>實機上真正讓上坡倒溜被擋下的主力</b>（讓 Plan A 在還慢慢滾時就能生效）。代價：引入帶速鎖定，最壞在 0.94 km/h 送出 LOCK。必測：<b>平地正常停車是否變頓</b>、煞車片異音</td></tr>
+      <tr>
+        <td class="id">5</td>
+        <td class="f">EMB_ROLLBACK_CMD_THRESHOLD</td>
+        <td class="loc">src/userparms.h : 278</td>
+        <td class="old">500</td>
+        <td class="new">100</td>
+        <td>倒溜偵測武裝門檻<br>0.35 → <b>0.069 km/h</b></td>
+        <td>更早武裝、更晚解除武裝，空窗期縮短。方向正確。<b>該行註解未更新</b>（見表 2 第 3 項）</td></tr>
+      <tr class="bad">
+        <td class="id">6</td>
+        <td class="f">EMB_ROLLBACK_REV_EDGES</td>
+        <td class="loc">src/userparms.h : 279</td>
+        <td class="old">3</td>
+        <td class="new">90</td>
+        <td>觸發前允許倒退<br>5.2 → <b>157.5 mm</b><br><span class="lock">規格上限 91 邊緣 = 159 mm</span></td>
+        <td><b>只剩 1 個邊緣的餘裕</b>（<code>#error</code> 護欄剛好通過）。且計數器為硬歸零，需 90 個<b>連續</b>反向邊緣。<b>這條保護實質失效 → 見表 2 第 1 項</b></td></tr>
+      <tr>
+        <td class="id">7</td>
+        <td class="f">EMBRAKER_RELEASE_THRESHOLD_FWD<br>EMBRAKER_RELEASE_THRESHOLD_REV</td>
+        <td class="loc">s_logic_embraker.h : 34-35</td>
+        <td class="old">1600<br>1600</td>
+        <td class="new">800<br>800</td>
+        <td>EMB 釋放門檻<br>1.10 → <b>0.55 km/h</b></td>
+        <td><b>這其實修掉一個上坡起步死角：</b>舊值 1600 高於 <code>OUTPUT_MIN</code>=1501，代表油門踩到最低有效輸出時 EMB 仍不放開；新值低於它 → 一有有效油門就放</td></tr>
+      <tr>
+        <td class="id">8</td>
+        <td class="f">LOGIC_TEMP_CONTROLLER_RATIO_NORMAL<br>… _LEVEL_1 ~ _LEVEL_5</td>
+        <td class="loc">s_logic_temp_controller.h : 99-104</td>
+        <td class="old">0.33<br>0.31 / 0.29<br>0.271 / 0.253<br>0.234</td>
+        <td class="new">0.35<br>0.33 / 0.31<br>0.291 / 0.273<br>0.254</td>
+        <td>六個溫區電流上限一律 <b>+0.02</b>（約 +6~8%）</td>
+        <td>供起步扭力頭。必測：<b>連續爬坡後量控制器與馬達溫升</b>，確認不會提早進降載區</td></tr>
+    </table>
+    <div class="danger"><b>表 1 全部屬於加速 / 煞停 / 電流的安全相關項目。</b>燒錄後第一次上車必測順序：平路起步與停止 → 坡道起步（確認倒溜保護動作）→ 低速切前後 → 全速煞停 → 連續爬坡量溫升。</div>
+  </div>
+
+  <!-- ================= TABLE 2 ================= -->
+  <div class="card">
+    <h2><span class="n">表 2</span>待討論 / 不確定事項與建議</h2>
+    <p class="legend"><span class="p hi">高</span> 影響安全或現場作業，建議立刻處理　<span class="p md">中</span> 應處理但不阻擋上車測試　<span class="p lo">低</span> 收尾項目</p>
+    <table>
+      <tr>
+        <th style="width:36px">#</th>
+        <th style="width:46px">優先</th>
+        <th style="width:210px">項目</th>
+        <th style="width:330px">現況與問題</th>
+        <th>建議</th>
+      </tr>
+      <tr class="bad">
+        <td class="id">1</td>
+        <td class="c"><span class="p hi">高</span></td>
+        <td>倒溜偵測實質失效<br><span style="color:var(--muted);font-size:.9em">（表 1 第 6 項的後果）</span></td>
+        <td>門檻 90 需<b>連續</b> 90 個反向邊緣，而計數器在遇到任何一個方向一致的邊緣時是<b>硬歸零</b>（<code>main.c:2837</code> <code>g_u8EmbRevEdgeCnt = 0;</code>）。坡上車體晃動使方向偶爾翻一次，累積的 89 個就全部清光 → 計數永遠到不了 90。<br><br>另：<code>bcc1671</code> 的 commit message 明確寫了「change the reverse-edge counter to decrement instead of hard-reset」，但<b>該 commit 完全沒有動到 main.c</b>，這半段修法從未入庫。</td>
+        <td><b>把遺漏的那半段補上：<code>main.c:2837</code> 由「歸零」改為「遞減」</b>（例如每個方向一致的邊緣只扣 1，或扣固定值）。<br><br>這樣<b>完全不需要動任何 #define</b>，`REV_EDGES = 90` 可以照你的要求保留，但保護會真正生效。<br><br>若不改計數器邏輯，則 C1 那 12 行狀態機修正在實務上打不到，等於白補。</td></tr>
+      <tr class="bad">
+        <td class="id">2</td>
+        <td class="c"><span class="p hi">高</span></td>
+        <td>調機文件與程式不符</td>
+        <td><code>quick_tuning_sheet_V0.16.html</code> 與 <code>speed_profile_tuning_guide_V0.16.html</code> 記的仍是<b>曲線 4 / PTERM 3000 / UVW 3 / REV_EDGES 3</b>。這是保留新數值的直接後果 —— 現場若照文件調參會調錯。</td>
+        <td>依表 1 更新兩份文件的現值欄與相關敘述，版本戳改為 <b>V0.17</b>，重新產 PDF。這項不涉及任何程式碼決策，<b>可立即執行</b>。</td></tr>
+      <tr>
+        <td class="id">3</td>
+        <td class="c"><span class="p md">中</span></td>
+        <td><code>userparms.h</code> 兩行過期註解</td>
+        <td>第 278 行 <code>CMD_THRESHOLD 100</code> 仍寫「183 馬達RPM = 0.35 km/h」（那是舊值 500 的換算，新值為 0.069 km/h）。<br>第 279 行 <code>REV_EDGES 90</code> 仍寫「3 = 倒退 5.2 mm」（新值為 157.5 mm）。</td>
+        <td>只改註解、<b>不動數值</b>。留著會讓下一個調參的人算錯位移，屬於低成本高效益的修正。</td></tr>
+      <tr>
+        <td class="id">4</td>
+        <td class="c"><span class="p md">中</span></td>
+        <td>Modbus bit15 重複<br><span style="color:var(--muted);font-size:.9em">（前述 C3）</span></td>
+        <td><code>s_modbus_decode.c:272</code> 改為 <code>bCommAppError || bMotorSensorError</code>，但 <code>bMotorSensorError</code> <b>已佔 bit9</b> → 霍爾異常會同時點亮 bit9 與 bit15。該行註解仍寫 <code>EmbSensorFault (A04)</code>，與程式不符。疑似 A04/A19 改名時的副作用。</td>
+        <td>既然 C2 已把 <code>bEmbSensorFault</code> 放進 bit4，bit15 的搭便車已無必要 → <b>建議 bit15 只留 <code>bCommAppError</code></b>，並修正註解。<br><br>但這會改變對儀表的回報內容，<b>需先確認協定上 bit15 的定義</b>（Modbus_Protocol_V4.70）。</td></tr>
+      <tr>
+        <td class="id">5</td>
+        <td class="c"><span class="p md">中</span></td>
+        <td>A04 / A19 的 LED 閃爍次數未確認</td>
+        <td>enum 改名時<b>閃爍次數沒有跟著換</b>：霍爾異常仍閃 6 次、EMB 感測器異常仍閃 17 次。程式裡自留自白（<code>main.c:428</code>）：<code>return 17; // was A19's flash count -- TODO confirm correct LED flash count for A04</code>。<br><br>因此 commit 標題「Fix swapped A04/A19 alarm codes」只修了原始碼標籤，<b>對外報碼沒變</b> —— 原本若是錯的，現在還是錯的。</td>
+        <td>查文件確認 A04 與 A19 各自對應的正確閃爍次數，再修 <code>get_flash_count_for_alarm()</code> 並結掉 TODO。<b>這項我無法推測，需要規格文件。</b></td></tr>
+      <tr>
+        <td class="id">6</td>
+        <td class="c"><span class="p md">中</span></td>
+        <td>帶速鎖定的機械代價未驗<br><span style="color:var(--muted);font-size:.9em">（表 1 第 4 項）</span></td>
+        <td><code>UVW_LOCK_STOP_PULSES = 15</code> 讓 EMB 可能在 0.94 km/h 就上鎖，與原設計註解「避免帶速鎖定造成騎乘震動」的意圖相反。commit message 說是 on-hill testing 調出來的，<b>但未見平地行為與煞車片磨耗的驗證紀錄</b>。</td>
+        <td>數值依指示保留。請補<b>平地正常停車</b>的實機驗證：停車瞬間是否有頓感/異音。若確有頓感，優先用 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 加大延遲來緩解，而不是把 15 調回去（那會讓上坡保護失效）。</td></tr>
+      <tr>
+        <td class="id">7</td>
+        <td class="c"><span class="p lo">低</span></td>
+        <td>韌體版本號仍是 V0.16</td>
+        <td>工作資料夾已命名 <code>Longwin_LWFDSPC_V0.17</code>，但 <code>s_modbus_decode.h:14-16</code> 的 <code>FW_VER_MINOR</code> 仍是 <code>6</code> → Modbus ID03 reg 0x15 回報 <code>0x0016</code>，對外仍宣稱 V0.16。</td>
+        <td>確認要出版時把 <code>FW_VER_MINOR</code> 改成 <code>7</code>，並打 tag <code>v0.17</code>。目前為內部測試版，維持 V0.16 也可以，但兩者要一致以免混淆燒錄版本。</td></tr>
+      <tr>
+        <td class="id">8</td>
+        <td class="c"><span class="p lo">低</span></td>
+        <td>尚未編譯驗證</td>
+        <td>本次審閱與合併皆為靜態程式碼比對。本機無 MPLAB X / xc-dsc 工具鏈，<b>合併後的程式未經編譯</b>。</td>
+        <td>合併後請在 MPLAB X 開啟並 build 一次，確認無編譯錯誤（尤其 <code>#error</code> 護欄：<code>EMB_ROLLBACK_REV_EDGES</code> 90 對上限 91，只差 1）。</td></tr>
+      <tr>
+        <td class="id">9</td>
+        <td class="c"><span class="p lo">低</span></td>
+        <td>兩個工作資料夾未同步</td>
+        <td>本機 <code>main</code> 已含合併，<b>但尚未 push</b>（領先 <code>origin/main</code> 3 個 commit）。<br><code>D:\VSCode Workspace\Longwin_LWFDSPC_V0.17</code> 停在 <code>bcc1671</code>，且有 6 個檔案未 commit（內容與 <code>8062957</code> 相同，遠端已有備份，不會遺失）。</td>
+        <td>確認合併無誤後 push；V0.17 資料夾則 <code>git fetch</code> 後對齊到合併後的 <code>main</code>，避免兩邊各改一份而再次分岔。</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">LW_Jeff 合併後：參數變更對照與待決事項 &nbsp;·&nbsp; 2026-08-06 &nbsp;·&nbsp; merge 7f400cd &nbsp;·&nbsp; 完整逐項審閱見 LW_Jeff_branch_review_2026-08-06.html</p>
+</div>
+</body>
+</html>

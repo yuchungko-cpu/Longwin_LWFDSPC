@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>origin/LW_Jeff 分支變動審閱</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1280px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; }
+  h3 { font-size:1rem; margin:14px 0 6px; color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:6px;
+        padding:9px 12px; overflow-x:auto; font-family:Consolas,monospace; font-size:.8rem; margin:8px 0; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.83rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.82rem; color:#ffd580; word-break:break-all; }
+  td.loc { font-family:Consolas,monospace; font-size:.78rem; color:#cfe3ff; white-space:nowrap; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  td.id { text-align:center; white-space:nowrap; font-weight:800; color:var(--accent); }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.bad td { background:rgba(248,81,73,.07); }
+  .lock { color:var(--bad); font-weight:700; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.82rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.76rem; margin-right:5px; }
+  .v { display:inline-block; border-radius:4px; padding:0 6px; font-weight:800;
+       font-size:.76rem; white-space:nowrap; }
+  .v.pass { background:#1e5c2c; color:#c7f0cf; }
+  .v.warn { background:#6b5210; color:#ffe9ad; }
+  .v.fail { background:#6e1f1a; color:#ffd3ce; }
+  .v.none { background:#2b3948; color:#b9c8d6; }
+
+  /* ---- 列印 / PDF：淺色版 ---- */
+  @media print {
+    @page { size:A4 landscape; margin:10mm 9mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:9.5pt; line-height:1.42; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    pre { background:#f7f8fa; color:#111; border:1px solid #c8cfd6; font-size:8pt; }
+    table { font-size:7.6pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.val { color:#7a4b00; }
+    td.loc { color:#0b3d75; }
+    td.f { color:#8a3a00; }
+    td.id { color:#0b5cad; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.bad td { background:#ffefec !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .lock { color:#c0271a; }
+    .k { background:#ffd23f; color:#1a1200; }
+    .v.pass { background:#d6f0dc !important; color:#12591f !important; }
+    .v.warn { background:#fff0c9 !important; color:#7a5200 !important; }
+    .v.fail { background:#ffdad4 !important; color:#8f1f16 !important; }
+    .v.none { background:#eceff2 !important; color:#444 !important; }
+    a { color:#0b5cad; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>origin/LW_Jeff 分支變動審閱</h1>
+  <p class="sub">審閱日 2026-08-06 &nbsp;|&nbsp; 基準 <code>77b9905</code> (tag v0.16) &nbsp;|&nbsp; 2 個 commit &nbsp;|&nbsp; co-author: Claude Sonnet 5 &nbsp;|&nbsp; 尚未合併進 <code>main</code>（兩邊已分岔）</p>
+
+  <div class="card">
+    <p class="legend"><b>欄位說明</b>　<b>位置</b>＝檔案:行號（行號會隨改動位移，用符號名搜尋最可靠）
+    <span class="v pass">OK</span> 可直接合併　<span class="v warn">待驗</span> 需實機確認　<span class="v fail">建議修改</span> 合併前處理　<span class="v none">無影響</span> 編譯結果不變</p>
+    <pre>* 8062957  Fix swapped A04/A19 alarm codes; add EMB fault bit to Modbus LCD error register
+* bcc1671  EMB rollback: catch missed detections, tune uphill hold/climb response
+| * 17a77af (main) docs: version-stamp tuning guides, add quick sheet, generate PDFs
+|/
+* 77b9905 (tag: v0.16)</pre>
+    <div class="ok"><b>一句總結：</b>實質上是<b>一次調參 + 一個 EMB 狀態機補洞 + 兩個 Modbus bit 修正</b>。全部只有 <b>3 處</b>真正改變行為的程式碼，其餘是 <code>#define</code> 數值、enum 改名與註解。沒有新演算法。</div>
+    <div class="ok"><b>命令單位換算（看懂所有數字的前提）：</b>1 count = 0.366 馬達 RPM = <b>0.00069 km/h</b>；1 霍爾邊緣 = 車輪 <b>1.75 mm</b>；1 pulse/100ms = 33.3 馬達 RPM = <b>0.063 km/h</b>。</div>
+  </div>
+
+  <!-- ===== A ===== -->
+  <div class="card">
+    <h2><span class="n">A</span>實質行為改動（3 處，這是全部）</h2>
+    <table>
+      <tr><th style="width:38px">#</th><th style="width:250px">位置</th><th style="width:300px">改動</th><th>行為影響</th><th style="width:96px">評估</th></tr>
+      <tr class="hi">
+        <td class="id">A1</td>
+        <td class="loc">s_logic_embraker.c : 150-161</td>
+        <td>在 <code>WAITING_TO_LOCK</code> 新增 <code>else if (bRollbackDetected)</code> 分支（+12 行，內容與 <code>RELEASED</code> 分支逐行相同：立即 LOCK + 閂鎖 + 清兩個計時旗標）</td>
+        <td>鬆油門後的空窗期不再漏接倒溜訊號，不必掉到 3 s failsafe。<b>本次唯一的控制邏輯改動</b></td>
+        <td class="c"><span class="v pass">OK</span></td></tr>
+      <tr>
+        <td class="id">A2</td>
+        <td class="loc">s_modbus_decode.c : 262</td>
+        <td>LCD 錯誤暫存器 <code>bit4</code> 補上 <code>bEmbSensorFault</code>（原本無人寫入）</td>
+        <td>EMB 感測器故障終於會回報給儀表</td>
+        <td class="c"><span class="v pass">OK</span></td></tr>
+      <tr class="bad">
+        <td class="id">A3</td>
+        <td class="loc">s_modbus_decode.c : 272</td>
+        <td><code>bit15</code> 來源由 <code>bEmbSensorFault</code> 改為 <code>bMotorSensorError</code></td>
+        <td><code>bMotorSensorError</code> <b>已佔 bit9</b>，改後同一旗標同時出現在 bit9 與 bit15；該行註解仍寫 <code>EmbSensorFault (A04)</code>，與程式不符。疑似 A04/A19 改名時的副作用</td>
+        <td class="c"><span class="v fail">建議修改</span></td></tr>
+    </table>
+    <h3>A1 修的是什麼問題</h3>
+    <table>
+      <tr><th style="width:190px">訊號</th><th style="width:330px">用哪個命令</th><th>鬆油門後多久失效</th></tr>
+      <tr><td>狀態切換 <code>bIsActive</code></td><td class="f">g_stSystemData.i16TargetRpm（main.c:1401）<br>= <b>未平滑的原始油門目標</b></td><td><b>1 ms 內</b>歸零 → 狀態立刻離開 <code>RELEASED</code></td></tr>
+      <tr><td>倒溜計數器武裝</td><td class="f">piInputOmega.inReference（main.c:2827）<br>= <b>平滑後的實際命令</b></td><td>走 step/time 減速斜坡（−25~−40 counts/ms），<b>約 140~460 ms</b> 後才降到武裝門檻以下</td></tr>
+    </table>
+    <p style="font-size:.86rem;margin:8px 0 0">補洞前 <code>bRollbackDetected</code> 只在 <code>RELEASED</code> 被檢查，於是那 0.14~0.46 s 的空窗裡「訊號還活著，但沒有任何狀態在看它」。此時車正在倒溜，速度高於 UVW 進鎖門檻 → Plan A / Plan B 同時失效 → 只剩 <b>3 s failsafe</b>（且從命令歸零才起算），倒溜距離遠超「不得超過 1/4 車輪 = 159 mm」的規格。</p>
+    <h3>A1 的分支優先順序（插入後）</h3>
+    <pre>WAITING_TO_LOCK:
+  1. bIsActive            → 回 RELEASED（重新給油門）
+  2. bRollbackDetected    → 立即 LOCK + 閂鎖        &lt;-- 新增
+  3. bReverseEdgeDetected → 立即 LOCK（Plan B，需 UVW lock 已生效）
+  4. bUVWLockActive       → 延遲 50 ms → LOCK（Plan A 主路徑，正常停車走這條）
+  5. else                 → 命令歸零後 3000 ms failsafe</pre>
+    <div class="note"><b>次要觀察：</b>該分支設的 <code>s_bRollbackLatched</code> 在此狀態幾乎空轉 —— 能走到分支 2 就代表分支 1 未成立，亦即 <code>bIsActive == false</code> 必為真，下一拍進 <code>LOCKED</code> 時 <code>if (!bIsActive)</code> 立刻解閂。不是 bug，但註解說的「立即鎖定 + 閂鎖」只有前半段有實際作用。</div>
+  </div>
+
+  <!-- ===== B ===== -->
+  <div class="card">
+    <h2><span class="n">B</span>參數改動（全部為 <code>#define</code>，改完需重新編譯燒錄）</h2>
+    <table>
+      <tr><th style="width:230px">位置</th><th style="width:250px">參數</th><th style="width:96px">舊 → 新</th><th>物理意義 / 影響</th><th style="width:96px">評估</th></tr>
+      <tr class="hi">
+        <td class="loc">s_logic_motor.h : 112</td>
+        <td class="f">ACCEL_FILTER_CURVE_SELECT</td>
+        <td class="val">4 → 5</td>
+        <td>限斜率 R 由 6 → 8 counts/tick：加速率 <b>2.07 → 2.76 km/h/s</b>；到達時間 4.0 → 3.2 s；等斜率段穩態落後 0.53 → <b>0.70 km/h</b>。τ 未動（K=7, 256 ms），圓角軟度不變</td>
+        <td class="c"><span class="v warn">待驗</span></td></tr>
+      <tr class="hi">
+        <td class="loc">src/userparms.h : 212</td>
+        <td class="f">SPEEDCNTR_PTERM</td>
+        <td class="val">3000 → 5000</td>
+        <td>速度環 P，<b>+67%</b>。配套曲線 5 讓實際速度追得上更陡的命令；需確認不振盪</td>
+        <td class="c"><span class="v warn">待驗</span></td></tr>
+      <tr class="hi">
+        <td class="loc">src/userparms.h : 213</td>
+        <td class="f">SPEEDCNTR_ITERM</td>
+        <td class="val">10 → 20</td>
+        <td>速度環 I，<b>×2</b>。上坡起步扭力建立更快；需確認鬆油門 creep 未惡化</td>
+        <td class="c"><span class="v warn">待驗</span></td></tr>
+      <tr class="hi">
+        <td class="loc">src/userparms.h : 263</td>
+        <td class="f">UVW_LOCK_STOP_PULSES</td>
+        <td class="val">3 → 15</td>
+        <td>「接近靜止」門檻 0.19 → <b>0.94 km/h</b>。<b>這是實機上真正讓上坡倒溜被擋下的主力</b>（讓 Plan A 在還在慢慢滾時就能生效）。代價：引入帶速鎖定，最壞在 0.94 km/h 送出 LOCK，與原註解「避免帶速鎖定造成騎乘震動」的設計意圖相反</td>
+        <td class="c"><span class="v warn">待驗</span></td></tr>
+      <tr>
+        <td class="loc">src/userparms.h : 278</td>
+        <td class="f">EMB_ROLLBACK_CMD_THRESHOLD</td>
+        <td class="val">500 → 100</td>
+        <td>倒溜偵測武裝門檻 0.35 → 0.069 km/h（更早武裝、更晚解除武裝）。<b>該行註解未更新</b>，仍寫「183 馬達RPM = 0.35 km/h」（那是舊值 500 的換算）</td>
+        <td class="c"><span class="v pass">OK</span></td></tr>
+      <tr class="bad">
+        <td class="loc">src/userparms.h : 279</td>
+        <td class="f">EMB_ROLLBACK_REV_EDGES</td>
+        <td class="val">3 → 90</td>
+        <td>觸發前允許倒退 5.2 → <b>157.5 mm</b>，規格上限 91 邊緣 = 159 mm，<span class="lock">只剩 1 個邊緣餘裕</span>（<code>#error</code> 護欄剛好通過）。且計數器是<b>硬歸零</b>而非遞減（見 E），需 90 個<b>連續</b>反向邊緣、中間不能有任何方向一致的邊緣。<b>該行註解未更新</b>，仍寫「3 = 倒退 5.2 mm」</td>
+        <td class="c"><span class="v fail">建議修改</span></td></tr>
+      <tr>
+        <td class="loc">s_logic_embraker.h : 34-35</td>
+        <td class="f">EMBRAKER_RELEASE_THRESHOLD_FWD<br>EMBRAKER_RELEASE_THRESHOLD_REV</td>
+        <td class="val">1600 → 800</td>
+        <td>EMB 釋放門檻 1.10 → 0.55 km/h。<b>舊值 1600 高於 <code>OUTPUT_MIN</code> = 1501 counts</b>，代表油門剛踩到最低有效輸出時 EMB 仍不放開；新值低於它 → 一有有效油門就放開。<b>這其實修掉了一個上坡起步的死角</b></td>
+        <td class="c"><span class="v pass">OK</span></td></tr>
+      <tr>
+        <td class="loc">s_logic_temp_controller.h : 99-104</td>
+        <td class="f">LOGIC_TEMP_CONTROLLER_RATIO_NORMAL<br>… _LEVEL_1 ~ _LEVEL_5</td>
+        <td class="val">全部 +0.02</td>
+        <td>六個溫區電流上限一律 <b>+0.02</b>（0.33→0.35、0.31→0.33、0.29→0.31、0.271→0.291、0.253→0.273、0.234→0.254），相當於上調 6~8%，供起步扭力頭</td>
+        <td class="c"><span class="v warn">待驗</span></td></tr>
+    </table>
+    <div class="danger"><b>B 表全部屬於加速 / 煞停 / 電流的安全相關項目。</b>燒錄後第一次上車必測：平路起步與停止（確認未變頓）→ 坡道起步（確認倒溜保護動作）→ 低速切前後 → 全速煞停 → 連續爬坡後量溫升。</div>
+  </div>
+
+  <!-- ===== C ===== -->
+  <div class="card">
+    <h2><span class="n">C</span>零行為變化：A04 / A19 enum 改名</h2>
+    <table>
+      <tr><th style="width:230px">位置</th><th>內容</th><th style="width:96px">評估</th></tr>
+      <tr>
+        <td class="loc">s_logic_error_handler.h : 25, 29</td>
+        <td>兩個列舉成員互換名稱：<code>A19_EMB_SENSOR_FAULT</code> → <code>A04_EMB_SENSOR_FAULT</code>、<code>A04_MOTOR_HALL_FAULT</code> → <code>A19_MOTOR_HALL_FAULT</code>。<b>序位完全未動</b>（EMB 感測器仍在序位 3、霍爾仍在序位 4）</td>
+        <td class="c"><span class="v none">無影響</span></td></tr>
+      <tr>
+        <td class="loc">main.c : 417, 427</td>
+        <td><code>get_flash_count_for_alarm()</code> 兩個 case 標籤</td>
+        <td class="c"><span class="v none">無影響</span></td></tr>
+      <tr>
+        <td class="loc">main.c : 1308, 1313</td>
+        <td>兩個 Modbus 旗標對映（<code>bMotorSensorError</code> / <code>bEmbSensorFault</code>）</td>
+        <td class="c"><span class="v none">無影響</span></td></tr>
+      <tr>
+        <td class="loc">s_logic_embraker.c : 48, 51, 76, 113</td>
+        <td>4 處 <code>logic_errorHandler_setAlarmStatus()</code> 呼叫</td>
+        <td class="c"><span class="v none">無影響</span></td></tr>
+    </table>
+    <p style="font-size:.86rem;margin:8px 0 0">錯誤處理器全部以<b>序位</b>運作（<code>getHighestPriorityActiveAlarm()</code> 直接跑 <code>for</code> 回傳索引、bitmask 是 <code>1 &lt;&lt; 序位</code>），序位既然沒動，優先權順序、bitmask 與所有旗標行為完全相同 —— 這 8 處編譯出來的碼一模一樣。</p>
+    <div class="danger"><b>因此 commit 標題「Fix swapped A04/A19 alarm codes」並沒有修到對外行為。</b>LED 閃爍次數仍綁在原來的實體故障上（霍爾異常閃 6 次、EMB 感測器異常閃 17 次，兩者都沒換），程式裡也自留了自白（main.c:428）：<code>return 17; // was A19's flash count -- TODO confirm correct LED flash count for A04</code>。若原本 LED/LCD 報的碼是錯的，改名後<b>還是錯的</b>；真正要修的是 <code>get_flash_count_for_alarm()</code> 的回傳值與 Modbus bit 位置，前提是先確認文件上 A04 / A19 各自對應的閃爍次數。</div>
+  </div>
+
+  <!-- ===== D ===== -->
+  <div class="card">
+    <h2><span class="n">D</span>註解與建置檔（無編譯產物差異）</h2>
+    <table>
+      <tr><th style="width:250px">位置</th><th>內容</th></tr>
+      <tr><td class="loc">s_logic_embraker.h : 45-56</td><td>EMB 動作準則 (4) 說明擴寫（解釋兩個訊號時間軸不一致的成因）、doxygen 參數說明更新、<code>A19</code> → <code>A04</code> 字樣</td></tr>
+      <tr><td class="loc">s_modbus_decode.h : 110</td><td><code>// D4, A19</code> → <code>// D4, A04</code></td></tr>
+      <tr><td class="loc">nbproject/Makefile-default.mk（128 行）<br>nbproject/Makefile-genesis.properties</td>
+        <td>MPLAB X 重新產生。<b>濾掉路徑字串後實質差異為零</b> —— 無編譯選項、最佳化等級或原始檔清單變更。唯一真正的差別是換了編譯機：<code>proj.dir</code> 由 <code>D:\VSCode Workspace\…</code> 變成 <code>D:\20260803\…</code>，以及 <code>host.id</code> 與時間戳</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== E ===== -->
+  <div class="card">
+    <h2><span class="n">E</span>commit message 宣稱但未入庫</h2>
+    <table>
+      <tr><th style="width:46%">bcc1671 的 commit message 寫的</th><th>實際</th></tr>
+      <tr class="bad"><td>「change the reverse-edge counter to decrement instead of hard-reset on a direction-matching edge」</td>
+        <td><b>沒有。</b><code>bcc1671</code> 完全沒有動到 <code>main.c</code>（該 commit 只含 5 個檔案：embraker.c/h、logic_motor.h、temp_controller.h、userparms.h）。<code>main.c:2837</code> 仍是 <code>g_u8EmbRevEdgeCnt = 0;  // 方向一致 → 清零</code>；<code>origin/main..origin/LW_Jeff</code> 在這段的 diff 為 <b>0 行</b></td></tr>
+    </table>
+    <div class="danger"><b>這一項缺席與 B 表的 <code>REV_EDGES = 90</code> 相乘 = 洞補了但通道被堵住。</b>門檻 90 加上硬歸零，代表坡上車體晃動使方向偶爾翻一次，累積的 89 個邊緣就全部清光 → 計數永遠到不了 90。這兩個改動本來是配套的，只進了一半。結論：A1 補好的分支，實務上比改動前更難觸發。</div>
+  </div>
+
+  <!-- ===== F ===== -->
+  <div class="card">
+    <h2><span class="n">F</span>合併建議</h2>
+    <table>
+      <tr><th style="width:40px">序</th><th style="width:280px">項目</th><th>處理方式</th></tr>
+      <tr><td class="c">1</td><td>A1 狀態機修正（12 行）</td><td><b>直接合併。</b>邏輯正確、插入位置正確、不會誤鎖</td></tr>
+      <tr><td class="c">2</td><td><code>EMB_ROLLBACK_REV_EDGES = 90</code></td><td>先降回 <b>16 左右（28 mm）</b>，或把 E 表的「遞減而非歸零」補上再談 90。維持 90 的話等於放棄這條保護</td></tr>
+      <tr><td class="c">3</td><td><code>UVW_LOCK_STOP_PULSES = 15</code></td><td>保留（這是實機有效的那一項），但要補<b>平地正常停車</b>的驗證，確認沒有因帶速鎖定變頓</td></tr>
+      <tr><td class="c">4</td><td>A3 Modbus bit15</td><td>修掉 <code>bMotorSensorError</code> 同時出現在 bit9 / bit15 的問題；先確認 bit15 原意是「App 通訊 or EMB 感測器」還是「只有 App 通訊」</td></tr>
+      <tr><td class="c">5</td><td>C 表的 LED 閃爍次數</td><td>確認文件上 A04 / A19 的正確閃爍次數後，一併修 <code>get_flash_count_for_alarm()</code>，把 main.c:428 的 TODO 結掉</td></tr>
+      <tr><td class="c">6</td><td>userparms.h 過期註解</td><td><code>CMD_THRESHOLD</code>（仍寫 0.35 km/h）與 <code>REV_EDGES</code>（仍寫 3 = 5.2 mm）兩行要跟著新值改</td></tr>
+      <tr><td class="c">7</td><td>調機文件</td><td>合併後 <code>speed_profile_tuning_guide</code>、<code>quick_tuning_sheet</code> 記的是曲線 4 / PTERM 3000 / UVW 3 / REV_EDGES 3，<b>全部要重新版本戳</b></td></tr>
+    </table>
+    <div class="note"><b>未驗證事項：</b>本審閱為靜態程式碼比對，<b>未編譯</b>（環境無 MPLAB X / xc-dsc）。B 表的參數依 commit message 是 on-hill testing 調出來的，但平地行為與溫升未見驗證紀錄。</div>
+  </div>
+
+  <p class="foot">origin/LW_Jeff 分支變動審閱 &nbsp;·&nbsp; 2026-08-06 &nbsp;·&nbsp; 基準 77b9905 (v0.16) &nbsp;·&nbsp; 相關文件：speed_profile_tuning_guide_V0.16.html、EMB_rollback_lock_guide_V0.16.html、quick_tuning_sheet_V0.16.html</p>
+</div>
+</body>
+</html>

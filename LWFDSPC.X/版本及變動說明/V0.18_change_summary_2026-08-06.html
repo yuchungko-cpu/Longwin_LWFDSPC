@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V0.18 變動摘要</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1280px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; }
+  h3 { font-size:1rem; margin:14px 0 6px; color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:6px;
+        padding:9px 12px; overflow-x:auto; font-family:Consolas,monospace; font-size:.8rem;
+        margin:8px 0; line-height:1.5; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.83rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.82rem; color:#ffd580; word-break:break-all; }
+  td.loc { font-family:Consolas,monospace; font-size:.78rem; color:#cfe3ff; white-space:nowrap; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  td.id { text-align:center; font-weight:800; color:var(--accent); }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.bad td { background:rgba(248,81,73,.06); }
+  .old { color:#f0a; font-family:Consolas,monospace; }
+  .new { color:#7ee787; font-family:Consolas,monospace; font-weight:700; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.82rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .path { background:rgba(255,210,63,.1); border:1px solid #6b5a1e; border-radius:4px;
+          padding:0 5px; font-family:Consolas,monospace; font-size:.78rem; color:#ffe082; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.76rem; margin-right:5px; }
+  .v { display:inline-block; border-radius:4px; padding:0 6px; font-size:.76rem; font-weight:700; }
+  .v.core { background:rgba(248,81,73,.18); color:#ff9d96; border:1px solid var(--bad); }
+  .v.cmt  { background:rgba(159,176,192,.15); color:var(--muted); border:1px solid var(--border); }
+  .v.ver  { background:rgba(78,161,255,.15); color:#8fc7ff; border:1px solid var(--accent); }
+  .v.warn { background:rgba(210,153,34,.15); color:#e6c069; border:1px solid var(--warn); }
+  .v.pass { background:rgba(63,185,80,.15); color:#7ee787; border:1px solid var(--ok); }
+
+  /* ---- 列印 / PDF：淺色版 ---- */
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:10pt; line-height:1.45; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    pre { background:#f7f8fa; color:#111; border:1px solid #c8cfd6; font-size:8pt; }
+    .path { background:#fff4c2; color:#4a3200; border:1px solid #d6a400; }
+    table { font-size:7.8pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.val { color:#7a4b00; }
+    td.loc { color:#0b3d75; }
+    td.f { color:#8a3a00; }
+    td.id { color:#0b5cad; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.bad td { background:#ffeceb !important; }
+    .old { color:#a5006e; }
+    .new { color:#0a6b22; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .k { background:#ffd23f; color:#1a1200; }
+    .v.core { background:#ffece9; color:#a11a0f; border-color:#c0271a; }
+    .v.cmt  { background:#eee; color:#444; border-color:#bbb; }
+    .v.ver  { background:#e6eef8; color:#0b3d75; border-color:#0b5cad; }
+    .v.warn { background:#fff8e6; color:#7a5200; border-color:#d6a400; }
+    .v.pass { background:#eaf7ec; color:#1a6b28; border-color:#1a7f34; }
+    a { color:#0b5cad; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LWFDSPC V0.18 變動摘要</h1>
+  <p class="sub">2026-08-06 &nbsp;|&nbsp; commit <code>c8fa466</code> &nbsp;|&nbsp; tag <code>v0.18</code> &nbsp;|&nbsp; Modbus ID03 0x15 = <code>0x0018</code> &nbsp;|&nbsp; 已推送 <code>origin/main</code></p>
+
+  <!-- ===== 0 總結 ===== -->
+  <div class="card">
+    <h2><span class="n">0</span>一句話總結</h2>
+    <div class="ok"><b>有動力倒溜偵測的計數方式由「連續」改為「淨」（反向 +1、正向 −1、地板 0），並在 EMB 上鎖／放鎖時清零計數器。</b>
+      前者讓門檻放大後仍能符合「倒溜不超過 1/4 車輪」規格，後者是前者的<b>必要配套</b>，否則會出現重新起步被立即重鎖的卡死。</div>
+    <p class="legend"><b>標籤說明</b>　<span class="v core">邏輯</span>＝會改變執行行為　<span class="v cmt">註解</span>＝僅文件／註解，不影響行為　<span class="v ver">版本</span>＝版本號回報</p>
+    <table>
+      <tr><th style="width:60px">類別</th><th style="width:110px">檔案</th><th style="width:60px">處數</th><th>內容</th></tr>
+      <tr class="hi"><td class="c"><span class="v core">邏輯</span></td><td class="loc">main.c</td><td class="c">3</td>
+        <td>淨計數（1 處）、LOCK／RELEASE 清零（2 處）</td></tr>
+      <tr><td class="c"><span class="v ver">版本</span></td><td class="loc">s_modbus_decode.h</td><td class="c">1</td>
+        <td><code>FW_VER_MINOR</code> 6 → 8</td></tr>
+      <tr><td class="c"><span class="v cmt">註解</span></td><td class="loc">main.c / userparms.h<br>s_logic_embraker.c/.h</td><td class="c">6</td>
+        <td>語意由「連續」改為「淨」、修正過時的換算數字</td></tr>
+    </table>
+    <p class="legend">合計 5 檔案、38 行新增／18 行刪除。行號會隨後續改動位移，用<b>參數名或函式名搜尋</b>最可靠。</p>
+  </div>
+
+  <!-- ===== 1 邏輯變動 ===== -->
+  <div class="card">
+    <h2><span class="n">1</span>程式邏輯變動（會改變行為，共 2 項）</h2>
+
+    <h3>1-1. 反向邊緣計數：連續 → 淨</h3>
+    <table>
+      <tr><th style="width:150px">位置</th><th style="width:250px">舊</th><th style="width:250px">新</th><th>理由</th></tr>
+      <tr class="hi">
+        <td class="loc">main.c : 2852<br>CNRead_Inline()</td>
+        <td><pre class="old">} else {
+  g_u8EmbRevEdgeCnt = 0;
+}</pre></td>
+        <td><pre class="new">} else if (g_u8EmbRevEdgeCnt > 0u) {
+  g_u8EmbRevEdgeCnt--;
+}</pre></td>
+        <td>規格管的是<b>淨</b>倒溜位移，而連續計數只能界定<b>單調</b>位移。上坡與重力拉鋸時（倒溜→積分器充飽→推前一小段→再倒溜），連續計數每個循環都被歸零，淨位移卻早已超過 1/4 車輪 → <b>永遠不鎖</b>。正向抵扣可讓拉鋸下的計數仍單調爬到門檻。</td></tr>
+    </table>
+    <div class="note"><b>為什麼地板取 0 而不讓它變負：</b>否則長距離正常前進會「預存額度」，後續真的倒溜時要先把負值填回來才會觸發，反而延誤偵測。<br>
+      <b>靜止抖動免疫仍在：</b>抖動時方向交替 → 正負相抵停在 0 附近。<br>
+      <b>命令低於 <code>EMB_ROLLBACK_CMD_THRESHOLD</code> 的解除武裝分支維持直接歸零</b>（未改）—— 那是「駕駛沒在下命令」，與拉鋸無關。</div>
+    <div class="ok"><b>相容性：</b>門檻小時（如原設計 N=3）本式與舊的連續計數行為<b>幾乎不可區分</b>，差異只在門檻放大後才顯現。</div>
+
+    <h3>1-2. EMB 動作處清零計數器</h3>
+    <table>
+      <tr><th style="width:150px">位置</th><th style="width:120px">動作</th><th style="width:200px">新增</th><th>理由</th></tr>
+      <tr class="bad">
+        <td class="loc">main.c : 1432</td><td class="c">ACTION_LOCK</td>
+        <td><pre class="new">g_u8EmbRevEdgeCnt = 0;</pre></td>
+        <td>偵測已被執行 → 位移預算用掉。閂鎖期間每個 tick 都會發 LOCK，故全程壓在 0</td></tr>
+      <tr class="bad">
+        <td class="loc">main.c : 1436</td><td class="c">ACTION_RELEASE</td>
+        <td><pre class="new">g_u8EmbRevEdgeCnt = 0;</pre></td>
+        <td>每次放煞車都從零起算 —— <b>打斷再鎖迴圈的關鍵</b>。RELEASE 只在狀態轉移時發出（平時為 <code>ACTION_NONE</code>），是一次性事件，不會誤清正在累積的倒溜</td></tr>
+    </table>
+    <div class="danger"><b>不加這兩行會卡死。</b><code>g_u8EmbRevEdgeCnt</code> 只在霍爾邊緣中斷內更新（整段包在 <code>if (OldHallState != HallState)</code> 內），
+      車被煞車夾住不動時<b>整段完全不執行</b> —— 連「命令歸零 → 解除武裝歸零」的分支也不會跑 → 計數凍結在 ≥ 門檻。流程如下：</div>
+    <table>
+      <tr><th style="width:40px">步</th><th style="width:260px">事件</th><th style="width:110px">EMB 狀態</th><th style="width:80px">計數</th><th>結果</th></tr>
+      <tr><td class="id">1</td><td>倒溜達門檻 → LOCK + 閂鎖</td><td class="c">LOCKED</td><td class="val">90</td><td>正常鎖定</td></tr>
+      <tr><td class="id">2</td><td>鬆油門 → 解閂</td><td class="c">LOCKED</td><td class="val">90</td><td>車不動 → 無邊緣 → 計數不變</td></tr>
+      <tr><td class="id">3</td><td>重新給油門 → 運轉前檢查通過</td><td class="c">RELEASED</td><td class="val">90</td><td>放煞車</td></tr>
+      <tr class="bad"><td class="id">4</td><td>下一個 20 ms tick</td><td class="c">→ LOCKED</td><td class="val">90</td>
+        <td><b>立刻重鎖</b>（計數仍 ≥ 90）。車一個邊緣都沒動就被鎖死，而要扣掉計數又必須讓車動 → <b>卡死</b></td></tr>
+    </table>
+    <div class="note"><b>這性質在改動前就存在，但舊版靠運氣躲過：</b>夾煞車時車身小幅回彈只要出現<b>一個</b>正向邊緣就整個歸零。改成逐邊緣抵扣後，N=90 需要 90 個正向邊緣才清得完，回彈救不了 → 由「偶爾發生」變成「必然發生」。故這兩行是 1-1 的必要配套，不是可選項。</div>
+    <p class="legend">寫入為單純覆寫（非讀改寫），8-bit 在 16-bit MCU 上原子，與 ISR 無競態。</p>
+  </div>
+
+  <!-- ===== 2 行為對照 ===== -->
+  <div class="card">
+    <h2><span class="n">2</span>行為對照（舊 → 新）</h2>
+    <table>
+      <tr><th style="width:230px">情境</th><th style="width:250px">舊（連續 + 同向歸零）</th><th style="width:250px">新（淨 + 動作清零）</th><th>差異</th></tr>
+      <tr><td>單調重力倒溜</td><td>累加到 N 後鎖定</td><td>累加到 N 後鎖定</td><td class="c"><span class="v pass">相同</span></td></tr>
+      <tr class="hi"><td>PI 與重力拉鋸<br>（退 5 → 前 2 → 退 5…）</td><td>每循環歸零 → <b>可能永不觸發</b></td><td>淨值單調爬升 → <b>必然撞到 N</b></td><td class="c"><span class="v core">修正</span></td></tr>
+      <tr><td>恢復正常前進</td><td>一個邊緣即歸零</td><td>逐邊緣退回 0（N 個邊緣內）</td><td class="c"><span class="v warn">變慢</span></td></tr>
+      <tr><td>靜止抖動</td><td>歸零（免疫）</td><td>正負相抵停在 0 附近（免疫）</td><td class="c"><span class="v pass">相同</span></td></tr>
+      <tr class="hi"><td>鎖定後重新起步</td><td>靠回彈邊緣清零，<b>偶爾卡死</b></td><td>RELEASE 強制清零，<b>不會卡死</b></td><td class="c"><span class="v core">修正</span></td></tr>
+      <tr><td>門檻設小時（N=3）</td><td>—</td><td>與舊版幾乎不可區分</td><td class="c"><span class="v pass">相容</span></td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 3 版本號 ===== -->
+  <div class="card">
+    <h2><span class="n">3</span>版本號變動</h2>
+    <table>
+      <tr><th style="width:200px">參數</th><th style="width:200px">位置</th><th style="width:70px">舊</th><th style="width:70px">新</th><th>說明</th></tr>
+      <tr class="hi"><td class="f">FW_VER_MINOR</td><td class="loc">s_modbus_decode.h : 16</td><td class="c old">6</td><td class="c new">8</td>
+        <td>打包 <code>(CATEGORY&lt;&lt;8)|(MAJOR&lt;&lt;4)|MINOR</code> → Modbus ID03 <code>0x0015</code> 回報 <code>0x0018</code>，GUI 顯示 <b>V0.18</b></td></tr>
+      <tr><td class="f">（檔頭註解）</td><td class="loc">s_modbus_decode.h : 11~12</td><td class="c old">V0.16</td><td class="c new">V0.18</td>
+        <td>範例版本號同步更新</td></tr>
+    </table>
+    <div class="note"><b>v0.17 是跳號的</b>（既有 tag 為 v0.13 / v0.15 / v0.16，本來就不連續）。<code>V0.x</code> 一律為<b>內部測試版</b>。</div>
+  </div>
+
+  <!-- ===== 4 註解修正 ===== -->
+  <div class="card">
+    <h2><span class="n">4</span>註解／文件修正（不影響行為）</h2>
+    <table>
+      <tr><th style="width:40px">#</th><th style="width:210px">位置</th><th>修正內容</th></tr>
+      <tr><td class="id">1</td><td class="loc">main.c : 241~244</td>
+        <td><code>g_u8EmbRevEdgeCnt</code> 宣告註解改為「淨」計數，並加上 <b>⚠ 只在霍爾邊緣時更新 → 車靜止時凍結，故 LOCK/RELEASE 處必須清零</b></td></tr>
+      <tr><td class="id">2</td><td class="loc">main.c : 1418~1425</td>
+        <td>新增 8 行說明：為何兩個分支都必須清零、卡死流程、原子性論證</td></tr>
+      <tr><td class="id">3</td><td class="loc">main.c : 2830~2843</td>
+        <td>改寫計數區塊註解：淨計數定義、為何用淨而非連續、為何地板取 0、小門檻下的相容性</td></tr>
+      <tr class="hi"><td class="id">4</td><td class="loc">userparms.h : 279</td>
+        <td><b>修正過時換算</b>：<code>EMB_ROLLBACK_CMD_THRESHOLD</code> 舊註解寫「183 馬達RPM = 0.35 km/h」（那是舊值 500 的換算），現值 100 應為 <b>36.6 馬達RPM = 0.069 km/h</b>；比較符也由 <code>&gt;=</code> 更正為 <code>&gt;</code>（程式用嚴格大於）</td></tr>
+      <tr><td class="id">5</td><td class="loc">userparms.h : 269~273</td>
+        <td>段落說明改為淨計數，補上「規格管淨位移、拉鋸會使連續計數歸零」的理由</td></tr>
+      <tr><td class="id">6</td><td class="loc">userparms.h : 280</td>
+        <td><code>EMB_ROLLBACK_REV_EDGES</code> 註解「連續」→「淨」，補上 <b>90 = 157 mm</b> 的換算</td></tr>
+      <tr><td class="id">7</td><td class="loc">s_logic_embraker.h : 48~50<br>s_logic_embraker.c : 132~133</td>
+        <td>偵測訊號描述由「連續 N 個反向邊緣」改為「淨反向邊緣數達 N（反向 +1、正向 −1、地板 0）」</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 5 驗證 ===== -->
+  <div class="card">
+    <h2><span class="n">5</span>驗證狀態與實車必測</h2>
+    <h3>已完成</h3>
+    <table>
+      <tr><th style="width:200px">項目</th><th style="width:90px">結果</th><th>方式</th></tr>
+      <tr><td>編譯 <code>main.c</code></td><td class="c"><span class="v pass">通過</span></td><td>XC16 v2.10，專案原設定（<code>-mcpu=33CK256MP506 -O0 -Wall</code>），無錯誤</td></tr>
+      <tr><td>編譯 <code>s_logic_embraker.c</code></td><td class="c"><span class="v pass">通過</span></td><td>同上</td></tr>
+      <tr><td>編譯 <code>s_modbus_decode.c</code></td><td class="c"><span class="v pass">通過</span></td><td>同上（版本號巨集）</td></tr>
+      <tr class="hi"><td>實車行為</td><td class="c"><span class="v warn">未測</span></td><td>見下方必測項目</td></tr>
+    </table>
+    <div class="note">僅做單檔編譯驗證，<b>未做完整 build 與燒錄</b>。</div>
+
+    <h3>實車必測（順序有意義）</h3>
+    <table>
+      <tr><th style="width:40px">#</th><th style="width:260px">測項</th><th>判定</th></tr>
+      <tr class="hi"><td class="id">1</td><td>平地起停數次</td>
+        <td>停車後<b>必須能重新起步</b>，不可一給油門就被鎖。此項失敗 = 1-2 的清零沒生效，其餘測試無意義</td></tr>
+      <tr class="hi"><td class="id">2</td><td>坡上倒溜觸發 → 鬆油門 → 重新起步</td>
+        <td>直接驗證再鎖迴圈已消除。應能正常起步</td></tr>
+      <tr><td class="id">3</td><td>坡上拉鋸</td>
+        <td>驗證淨計數確實會爬到門檻（舊版會被歸零）。<b>建議用 X2CScope 同時看 <code>g_u8EmbRevEdgeCnt</code>、<code>piInputOmega.inReference</code>、<code>uGF.Direction</code></b></td></tr>
+      <tr><td class="id">4</td><td>Modbus 版本回報</td><td>ID03 位址 <code>0x0015</code> 應回 <code>0x0018</code>，GUI 顯示 V0.18</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 6 未完成 ===== -->
+  <div class="card">
+    <h2><span class="n">6</span>本版未處理（待實車數據後決定）</h2>
+    <table>
+      <tr><th style="width:40px">#</th><th style="width:230px">項目</th><th style="width:90px">現況</th><th>說明</th></tr>
+      <tr class="bad"><td class="id">1</td><td class="f">EMB_ROLLBACK_REV_EDGES</td><td class="c val">90</td>
+        <td>≈ <b>157 mm 才鎖</b>，貼著 1/4 車輪護欄上限 91（159 mm）。淨計數生效後<b>這顆值第一次會真的觸發</b>，手感需實測。原設計值為 3（5.2 mm）</td></tr>
+      <tr class="bad"><td class="id">2</td><td>調校文件同步</td><td class="c"><span class="v warn">待改</span></td>
+        <td><code>quick_tuning_sheet_V0.16.html</code>、<code>EMB_rollback_lock_guide_V0.16.html</code> 內 <code>REV_EDGES</code> 仍寫 3、<code>CMD_THRESHOLD</code> 仍寫 500，且尚未反映「連續→淨」的語意變更。建議等第 1 項定案後一次改</td></tr>
+    </table>
+    <div class="ok">兩項均已寫入 commit message 與 tag 說明，不會遺失。</div>
+  </div>
+
+  <p class="foot">LWFDSPC V0.18 變動摘要　|　2026-08-06　|　commit c8fa466　|　tag v0.18</p>
+</div>
+</body>
+</html>
