@@ -45,10 +45,10 @@ bool logic_embraker_init(uint16_t u16IembMv) {
     // 檢查初始故障狀態
     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
         s_eCurrentState = EMBRAKER_STATE_FAULT;
-        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, true);
+        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, true);
         return false;  // 初始化失敗
     }
-    logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, false);
+    logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, false);
 
     // 初始化為鎖定狀態
     s_eCurrentState = EMBRAKER_STATE_LOCKED;
@@ -73,7 +73,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
     if (s_eCurrentState == EMBRAKER_STATE_FAULT) {
         if (u16IembMv >= EMBRAKER_FAULT_THRESHOLD_MV) {
             // 電壓恢復，轉移到LOCKED狀態以便下次重新檢查
-            logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, false);
+            logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, false);
             eNextState = EMBRAKER_STATE_LOCKED;
         } else {
             // 仍處於故障，保持鎖定
@@ -110,7 +110,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     // 收到運轉指令，現在檢查IEMB
                     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
                         // 運轉前檢查失敗，進入故障狀態
-                        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A19_EMB_SENSOR_FAULT, true);
+                        logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, true);
                         eNextState = EMBRAKER_STATE_FAULT;
                         eAction = EMBRAKER_ACTION_LOCK;
                     } else {
@@ -147,6 +147,18 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eNextState = EMBRAKER_STATE_RELEASED;
                     s_bUvwLockTiming = false;   // 重置 UVW lock 延遲計時
                     s_bFailsafeTiming = false;  // 重置 failsafe 計時
+                } else if (bRollbackDetected) {
+                    // [有動力倒溜，遲到但有效] RELEASED 離開的判斷用未平滑的原始油門命令，
+                    //   放油門瞬間就會歸零；但反向邊緣計數器是用平滑後的 inReference 武裝/
+                    //   累加，衰減比較慢。兩者步調不一致時，計數達標的時間點可能落在狀態已經
+                    //   切到 WAITING_TO_LOCK 之後 —— 這裡補上同一個判斷，避免那段時間漏接、
+                    //   一路掉到 EMBRAKER_LOCK_TIMEOUT_MS 才鎖。處理方式與 RELEASED 分支相同
+                    //   (立即鎖定 + 閂鎖)，維持行為一致。
+                    eAction = EMBRAKER_ACTION_LOCK;
+                    eNextState = EMBRAKER_STATE_LOCKED;
+                    s_bRollbackLatched = true;
+                    s_bUvwLockTiming = false;
+                    s_bFailsafeTiming = false;
                 } else if (bReverseEdgeDetected) {
                     // [Plan B] 偵測到倒溜(反向霍爾邊緣) → 立即鎖定，繞過延遲。
                     // 適用於 UVW 短路在靜止時撐不住重力、車已開始倒溜的瞬間搶救。
