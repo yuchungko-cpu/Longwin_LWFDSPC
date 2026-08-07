@@ -342,6 +342,12 @@ int8_t logic_motor_getUpdateParams(uint16_t* pu16ActiveRpm,
 // ---------------------------------------------------------------------------
 static const S_ACCEL_FILTER_CURVE_T scsAccelFilterCurves[ACCEL_FILTER_CURVE_COUNT] =
     ACCEL_FILTER_CURVE_TABLE_INIT;
+static const S_DECEL_FILTER_CURVE_T scsDecelFilterCurves[DECEL_FILTER_CURVE_COUNT] =
+    DECEL_FILTER_CURVE_TABLE_INIT;
+static const S_ACCEL_FILTER_CURVE_T scsRevAccelFilterCurve = {
+    REV_ACCEL_FILTER_RATE, REV_ACCEL_FILTER_SHIFT, REV_ACCEL_FILTER_START_CMD};
+static const S_DECEL_FILTER_CURVE_T scsRevDecelFilterCurve = {
+    REV_DECEL_FILTER_RATE, REV_DECEL_FILTER_SHIFT, REV_DECEL_FILTER_SNAP};
 
 static uint16_t su16AccelFilterRateLimited = 0;  // 限斜率後的目標 (count)
 static uint32_t su32AccelFilterState = 0;        // 濾波狀態 (count << FRAC_BITS)
@@ -360,25 +366,41 @@ int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
                                            uint16_t u16MaxRpm,
                                            uint16_t u16MinRpm,
                                            S_MOTOR_STEP_TIME_T *psStepTime,
-                                           uint8_t u8CurveIndex) {
-    if (pu16ActiveRpm == NULL || psStepTime == NULL) {
+                                           uint8_t u8CurveIndex,
+                                           bool bReverse,
+                                           uint8_t u8DecelCurveIndex) {
+    (void)psStepTime;  // 加減速皆走濾波後已不需要 step/time；保留參數維持呼叫端相容
+    if (pu16ActiveRpm == NULL) {
         return -1;
     }
     if (u8CurveIndex >= ACCEL_FILTER_CURVE_COUNT) {
         u8CurveIndex = ACCEL_FILTER_CURVE_COUNT - 1u;
     }
-    const S_ACCEL_FILTER_CURVE_T *pcsCurve = &scsAccelFilterCurves[u8CurveIndex];
+    if (u8DecelCurveIndex >= DECEL_FILTER_CURVE_COUNT) {
+        u8DecelCurveIndex = DECEL_FILTER_CURVE_COUNT - 1u;
+    }
 
-    // 目標為 0 (放油門) 或需要減速時，交回原本的 step/time 減速表處理，
-    //   同時把濾波狀態解除預載，下次起步才會重新預載起始速度。
-    if ((u16TargetRpm == 0u) || (u16TargetRpm < u16CurrentRpm)) {
+    // 目標低於現值(含放油門的目標 0) → 減速；否則加速。兩者只換參數，濾波狀態共用。
+    bool bDecel = (u16TargetRpm < u16CurrentRpm);
+
+    // 四象限選參數：正轉/反轉 × 加速/減速
+    const S_ACCEL_FILTER_CURVE_T *pcsAccel =
+            bReverse ? &scsRevAccelFilterCurve : &scsAccelFilterCurves[u8CurveIndex];
+    const S_DECEL_FILTER_CURVE_T *pcsDecel =
+            bReverse ? &scsRevDecelFilterCurve : &scsDecelFilterCurves[u8DecelCurveIndex];
+    uint8_t u8Rate = bDecel ? pcsDecel->u8RateCountsPerTick : pcsAccel->u8RateCountsPerTick;
+    uint8_t u8Shift = bDecel ? pcsDecel->u8FilterShift : pcsAccel->u8FilterShift;
+
+    // 已經停在 0 且目標也是 0：不必跑濾波，順便解除預載讓下次起步重新預載起始速度。
+    if ((u16TargetRpm == 0u) && (u16CurrentRpm == 0u)) {
         sbAccelFilterPrimed = false;
-        su16AccelFilterRateLimited = u16CurrentRpm;  // 跟著實際命令走，下次起步不會留下舊值
+        su16AccelFilterRateLimited = 0u;
+        su32AccelFilterState = 0u;
 #if CODESW_X2C_SCOPE_ENABLE == 1
-        g_i16ScopeCmdRateLim = (int16_t)u16CurrentRpm;
+        g_i16ScopeCmdRateLim = 0;
 #endif
-        return logic_motor_getUpdateParams(pu16ActiveRpm, u32SystemTimeMs, u16CurrentRpm,
-                                           u16TargetRpm, u16MaxRpm, u16MinRpm, psStepTime);
+        *pu16ActiveRpm = 0u;
+        return -3;  // 無需調整
     }
 
     // 命令若被外部強制改寫(例如失速保護歸零、其他模式接手)，重新同步內部狀態，
@@ -387,13 +409,17 @@ int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
     uint16_t u16Diff = (u16StateCmd > u16CurrentRpm) ? (uint16_t)(u16StateCmd - u16CurrentRpm)
                                                      : (uint16_t)(u16CurrentRpm - u16StateCmd);
     if (!sbAccelFilterPrimed || (u16Diff > ACCEL_FILTER_RESYNC_TOL)) {
-        // 起步預載：直接跳到起始速度，省掉從 0 慢慢爬的那段 (原本要 750ms)
         uint16_t u16Seed = u16CurrentRpm;
-        if (u16Seed < pcsCurve->u16StartCmd) {
-            u16Seed = pcsCurve->u16StartCmd;
-        }
-        if (u16Seed < u16MinRpm) {
-            u16Seed = u16MinRpm;
+        if (!bDecel) {
+            // 起步預載：直接跳到起始速度，省掉從 0 慢慢爬的那段 (原本要 750ms)。
+            //   ⚠ 只有加速才預載。減速時種子必須就是當時速度 —— 若在此套 u16StartCmd
+            //   或 u16MinRpm 地板，從高速放油門會先往下跳到 1500 count 造成階躍。
+            if (u16Seed < pcsAccel->u16StartCmd) {
+                u16Seed = pcsAccel->u16StartCmd;
+            }
+            if (u16Seed < u16MinRpm) {
+                u16Seed = u16MinRpm;
+            }
         }
         if (u16Seed > u16MaxRpm) {
             u16Seed = u16MaxRpm;
@@ -423,35 +449,47 @@ int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
     uint16_t u16Target = (u16TargetRpm > u16MaxRpm) ? u16MaxRpm : u16TargetRpm;
 
     for (uint32_t u32i = 0; u32i < u32Ticks; ++u32i) {
-        // 第一級：限斜率 (決定到達時間)
-        // ⚠ 必須先比大小再相減：u16Target 與 su16AccelFilterRateLimited 都是 unsigned，
-        //   目標只要比目前值低 1 count(油門 ADC 雜訊就足夠)，相減會下溢成 65535，
-        //   於是限斜率每 tick 都以為「還差很遠」而繼續加，一路衝過目標且不會自己回來
+        // 第一級：限斜率 (決定到達時間)。上升與下降**對稱**,各用自己的 R。
+        // ⚠ 必須先比大小再相減：兩者都是 unsigned，差值只要方向不對就會下溢成 65535，
+        //   於是限斜率每 tick 都以為「還差很遠」而繼續走，一路衝過目標且不會自己回來
         //   (實測 300 tick 後從 12000 爬到 14408，靠重同步才被拉回，波形上是往上的三角尖峰)。
+        // ⚠ 下降分支是本次新增的。改動前這裡是 `= u16Target` 直接跳到位(註解寫「目標下修時
+        //   直接跟上，不往下慢慢走」),因此減速的斜率參數形同不存在,只有濾波在整形。
         if (su16AccelFilterRateLimited > u16Target) {
-            su16AccelFilterRateLimited = u16Target;  // 目標下修時直接跟上，不往下慢慢走
+            uint16_t u16Room = (uint16_t)(su16AccelFilterRateLimited - u16Target);
+            su16AccelFilterRateLimited -= (u16Room > u8Rate) ? u8Rate : u16Room;
+        } else {
+            uint16_t u16Room = (uint16_t)(u16Target - su16AccelFilterRateLimited);
+            su16AccelFilterRateLimited += (u16Room > u8Rate) ? u8Rate : u16Room;
         }
-        uint16_t u16Room = (uint16_t)(u16Target - su16AccelFilterRateLimited);
-        su16AccelFilterRateLimited += (u16Room > pcsCurve->u8RateCountsPerTick)
-                                              ? pcsCurve->u8RateCountsPerTick
-                                              : u16Room;
         // 第二級：一階低通 (磨圓折角)。帶小數位元，故不會在小誤差時卡住。
         uint32_t u32TargetShifted = (uint32_t)su16AccelFilterRateLimited << ACCEL_FILTER_FRAC_BITS;
         if (u32TargetShifted >= su32AccelFilterState) {
-            su32AccelFilterState +=
-                (u32TargetShifted - su32AccelFilterState) >> pcsCurve->u8FilterShift;
+            su32AccelFilterState += (u32TargetShifted - su32AccelFilterState) >> u8Shift;
         } else {
-            su32AccelFilterState -=
-                (su32AccelFilterState - u32TargetShifted) >> pcsCurve->u8FilterShift;
+            su32AccelFilterState -= (su32AccelFilterState - u32TargetShifted) >> u8Shift;
         }
     }
 
     uint16_t u16Out = ACCEL_FILTER_STATE_TO_CMD(su32AccelFilterState);
-    if (u16Out < u16MinRpm) {
+    // ⚠ u16MinRpm 地板**只在加速時**套用。減速若套上，命令會被釘在 OUTPUT_MIN
+    //   (1500 count = 1.04 km/h) 永遠到不了 0，車停不下來、UVW 短路與 EMB 也永遠鎖不上
+    //   (bUvwStopCommanded 要求 ReferenceRAW 恰好為 0)。與段位 0 潛行是同一類錯誤。
+    if (!bDecel && (u16Out < u16MinRpm)) {
         u16Out = u16MinRpm;
     }
     if (u16Out > u16MaxRpm) {
         u16Out = u16MaxRpm;
+    }
+
+    // 歸零吸附：殺掉一階濾波的漸近尾巴。理由見 s_logic_motor.h 的減速曲線段落 ——
+    //   不吸附要多等約 7.6τ(K=4 時約 240ms) 命令才會四捨五入成 0，UVW/EMB 白等這段;
+    //   且 K>=10 時整數衰減會卡在 1 count 永遠到不了 0。
+    if ((u16TargetRpm == 0u) && (u16Out < pcsDecel->u16SnapToZeroCmd)) {
+        u16Out = 0u;
+        su16AccelFilterRateLimited = 0u;
+        su32AccelFilterState = 0u;
+        sbAccelFilterPrimed = false;  // 下次起步重新預載起始速度
     }
 #if CODESW_X2C_SCOPE_ENABLE == 1
     g_i16ScopeCmdRateLim = (int16_t)su16AccelFilterRateLimited;  // 限斜率後、濾波前

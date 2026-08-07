@@ -57,7 +57,7 @@ typedef struct
 } S_MOTOR_STEP_TIME_T;
 
 // ============================================================================
-//  加速濾波曲線 (CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1 時生效)
+//  命令濾波曲線 (CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1 時生效)
 // ============================================================================
 //  結構：目標 → [限斜率 R] → [一階低通 τ] → 速度命令
 //    限斜率決定「到達時間」，濾波只把折角磨圓(消掉起步/到達/換段的階躍)。
@@ -65,8 +65,16 @@ typedef struct
 //    要把起步猛度壓到現行水準 (1.38 km/h/s) 需 τ≈4.1s，到達時間會變 19s。
 //    加上限斜率後，到達時間與原本線性斜坡幾乎相同 (5.20s → 5.65s)，但無階躍。
 //
-//  ⚠ 只作用於「加速」。減速仍走原本的 step/time 減速表(-25~-40 counts/ms)，
-//    煞停行為完全不變 —— 若讓濾波接手減速會慢 10 倍以上，屬安全風險。
+//  四象限獨立：正轉/反轉 × 加速/減速，四組參數互不共用。
+//    加速側早先已有濾波;減速側原本被排除(走 step/time 表)，因速度環增益調高後
+//    (SPEEDCNTR_PTERM 3000→5000、ITERM 10→20) 放油門與換段的命令階躍被放大成頓挫，
+//    故補上減速濾波。舊註解「若讓濾波接手減速會慢 10 倍以上」的前提是「只用一階濾波」;
+//    本實作減速同樣是「限斜率 + 濾波」兩級，斜率直接對齊原減速表的量級，故無此問題。
+//
+//  ⚠ 為何減速的 K 必須遠小於加速的 K：兩邊全程時間差一個數量級。
+//    加速全程約 3200 ms，τ = 2^7 × 2 = 256 ms 只佔 8%，磨圓了但延遲感覺不出來;
+//    減速全程僅 240~600 ms，同樣的 τ=256 ms 會佔 50~85%，停車時間會加倍(安全問題)。
+//    故減速取 K=3~5 (τ=16~64 ms)，維持與加速相近的「τ／全程」比例。
 //
 //  單位：命令 count (1 count = 0.366 機械 RPM = 0.00069 km/h)，見 s_logic_throttle.h 檔頭。
 // ============================================================================
@@ -137,6 +145,98 @@ typedef struct
         {6, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 4 */                    \
         {8, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 5 最快 */               \
     }
+
+// ============================================================================
+//  減速濾波曲線 (與加速完全獨立)
+// ============================================================================
+//  第三欄與加速的 u16StartCmd 位於量程的相反兩端，功能無法共用：
+//    加速需要「起步直接跳到起始速度」省掉爬升;
+//    減速需要「接近 0 時直接歸 0」殺掉一階濾波的漸近尾巴。
+//  ⚠ 歸零吸附是必要的，不是選配。兩個理由：
+//    (1) 延遲：K=4 時濾波輸出落後斜降約 τ×R ≈ 1000 counts，之後幾何衰減到能
+//        四捨五入成 0 還需約 7.6τ ≈ 240 ms。而 main.c 的 bUvwStopCommanded 要求
+//        ReferenceRAW 與 ctrlParm.qVelRef **恰好為 0**，UVW 短路與 EMB 上鎖才會啟動,
+//        不吸附就是白等這 240 ms。
+//    (2) 整數陷阱：`state -= state >> K` 在 state < 2^K 時位移結果為 0 而停止衰減。
+//        以 FRAC_BITS=10 計，K >= 10 會讓命令永遠卡在 1 count 到不了 0，UVW 就再也
+//        鎖不上(只剩 3 秒 failsafe)。吸附門檻讓這件事不可能發生。
+// ============================================================================
+typedef struct
+{
+    uint8_t u8RateCountsPerTick;  // 限斜率：每 tick 遞減的命令 count
+    uint8_t u8FilterShift;        // K：時間常數 τ = 2^K x ACCEL_FILTER_TICK_MS
+    uint16_t u16SnapToZeroCmd;    // 目標為 0 且輸出低於此值 → 直接歸零 (見上方說明)
+} S_DECEL_FILTER_CURVE_T;
+
+#define DECEL_FILTER_CURVE_COUNT 7u
+
+// 減速曲線選擇。**獨立於 ACCEL_FILTER_CURVE_SELECT** —— 減速是安全相關行為,
+//   不應跟著使用者選的加速段位走。
+// ⚠ 曲線 1、2 是後來追加的「更柔」段,插在最前面以維持「編號越大越猛」的順序,
+//   因此原本的曲線 1~5 已順移為 3~7。選 5 = 原本的曲線 3 (≈原 step/time 表中間值)。
+#define DECEL_FILTER_CURVE_SELECT (2u)  // 1~7；愈小愈柔。3 = 追加前的曲線 1 (R=40)
+
+#define DECEL_FILTER_CURVE_INDEX_DEFAULT ((uint8_t)((DECEL_FILTER_CURVE_SELECT) - 1u))
+
+#if ((DECEL_FILTER_CURVE_SELECT) < 1u) || ((DECEL_FILTER_CURVE_SELECT) > DECEL_FILTER_CURVE_COUNT)
+#error "DECEL_FILTER_CURVE_SELECT 必須是 1~7"
+#endif
+
+// 歸零吸附門檻預設 100 counts ≈ 0.069 km/h (體感上已完全停住)
+#define DECEL_FILTER_SNAP_TO_ZERO_DEFAULT 100u
+
+// 曲線索引 0~6 對應曲線 1~7。全程 = 12000 counts (8.29 km/h = 2.30 m/s) 降到 0。
+// 原本的 step/time 減速表是 -25~-40 counts/ms，等效 50~80 counts/tick (tick=2ms)：
+//   曲線  R    counts/ms  全程     K(τ)        制動距離*  備註
+//   1     20   10         1200ms   6(128ms)    1.38 m     最柔
+//   2     30   15          800ms   5( 64ms)    0.92 m
+//   3     40   20          600ms   5( 64ms)    0.69 m     追加前的曲線 1
+//   4     50   25          480ms   5( 64ms)    0.55 m     = 原表最慢段 (-25)
+//   5     64   32          375ms   4( 32ms)    0.43 m     ≈ 原表中間值
+//   6     80   40          300ms   4( 32ms)    0.35 m     = 原表最快段 (-40)
+//   7    100   50          240ms   3( 16ms)    0.28 m     最猛
+//   * 制動距離 = ½ x 2.30 m/s x 全程,假設車速跟得上命令(理論值,實車會更長)。
+// K 隨 R 增大而減小,維持「τ／全程」比例在 7~13% (與加速側的 8% 相當)。
+//
+// ⚠ 安全：曲線 1 的制動距離約為曲線 5 的 3.2 倍。柔順度與制動距離是直接的取捨,
+//   選用曲線 1~3 前務必實測制動距離並確認可接受。
+//
+// 註：原減速表是**速度相依**的(低速 -25、高速 -40,越接近停止越柔和)。改為單一 R
+//   會失去該特性,但一階濾波本身就在磨圓尾段,很大程度替代了它。此取捨已確認接受。
+#define DECEL_FILTER_CURVE_TABLE_INIT                                             \
+    {                                                                             \
+        {20, 6, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 曲線 1 最柔 1200ms */      \
+        {30, 5, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 曲線 2      800ms */       \
+        {40, 5, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 曲線 3      600ms */       \
+        {50, 5, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 曲線 4 = 原表最慢 */       \
+        {64, 4, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 曲線 5 ≈ 原表中間 */       \
+        {80, 4, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 曲線 6 = 原表最快 */       \
+        {100, 3, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT}, /* 曲線 7 最猛 */             \
+    }
+
+// ============================================================================
+//  反轉專屬濾波參數 (與正轉完全獨立)
+// ============================================================================
+//  不做 5 段：反轉上限是固定值 (LOGIC_THROTTLE_REV_OUTPUT_MAX = 4000 counts =
+//  2.76 km/h)、不隨段位變,per-level 曲線沒有意義。
+//
+//  ⚠ 改動前的實況：濾波呼叫沒有方向閘門,反轉一直在吃**正轉**的加速曲線
+//    (R=8、預載 1500)。後果是反轉 0→2.76 km/h 由原 step/time 表意圖的 5~8 秒
+//    ({1,2}~{3,4}) 變成約 0.63 秒,快了約 8 倍,且一踩就跳到反轉滿速的 38%。
+//    這是加速濾波導入時的連帶效果,先前未被注意。
+//  下列預設值刻意**維持該現況**(R=8/K=7/預載 1500),避免這次改動又動到反轉手感;
+//    若要調回原 step/time 表的 5~8 秒,把 REV_ACCEL_FILTER_RATE 降到 1~2、
+//    REV_ACCEL_FILTER_START_CMD 設 0 即可。
+// ============================================================================
+#define REV_ACCEL_FILTER_RATE 8u                                      // 每 tick 遞增 count
+#define REV_ACCEL_FILTER_SHIFT 7u                                     // τ = 256 ms
+#define REV_ACCEL_FILTER_START_CMD ACCEL_FILTER_START_CMD_DEFAULT     // 起始預載 1500
+
+// 反轉減速：原反轉減速表為 -10~-22 counts/ms,等效 20~44 counts/tick,取中段 32。
+//   4000 counts 全程 250 ms,τ=32 ms 佔 13%。
+#define REV_DECEL_FILTER_RATE 32u
+#define REV_DECEL_FILTER_SHIFT 4u
+#define REV_DECEL_FILTER_SNAP DECEL_FILTER_SNAP_TO_ZERO_DEFAULT
 
 // --- Merged Function Prototypes ---
 
@@ -295,16 +395,23 @@ int8_t logic_motor_getUpdateParams(uint16_t *pu16ActiveRpm,
 
 #if CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1
 /**
- * @brief 以「限斜率 + 一階濾波」更新馬達速度命令 (加速)；減速沿用 step/time 表
+ * @brief 以「限斜率 + 一階濾波」更新馬達速度命令。加速與減速皆走濾波，四象限獨立參數。
  * @param pu16ActiveRpm    指向實際速度命令的指標 (輸出)
  * @param u32SystemTimeMs  系統時間戳記 (毫秒)
  * @param u16CurrentRpm    當前速度命令
  * @param u16TargetRpm     目標速度命令
- * @param u16MaxRpm        上限 (段位決定的最高速)
- * @param u16MinRpm        下限
- * @param psStepTime       step/time 參數；僅在「減速」時使用
- * @param u8CurveIndex     曲線索引 0~4 (對應曲線 1~5)，超出範圍自動夾住
- * @return 0: 成功, -1: 時間未到或指標無效, -2: 時間參數無效(減速時), -3: 無需調整
+ * @param u16MaxRpm        上限 (方向決定的固定上限；段位上限已在油門模組內套用)
+ * @param u16MinRpm        下限 —— **只在加速時作為地板**。減速時絕不套用,否則命令會被
+ *                         釘在 OUTPUT_MIN(1500 count) 永遠到不了 0。
+ * @param psStepTime       step/time 參數；本函式已不使用(保留參數以維持呼叫端相容,
+ *                         且濾波停用時的 fallback 路徑仍需要它)
+ * @param u8CurveIndex     加速曲線索引 0~4 (對應曲線 1~5)，超出範圍自動夾住
+ * @param bReverse         true = 反轉,改用 REV_*_FILTER_* 那組獨立參數
+ * @param u8DecelCurveIndex 減速曲線索引 0~4，超出範圍自動夾住。bReverse 時忽略
+ * @return 0: 成功, -1: 時間未到或指標無效, -3: 無需調整
+ *
+ * @note 濾波狀態在加速↔減速之間**共用且連續** —— 那是同一條命令訊號,切換時只換參數,
+ *       狀態不重置,否則命令會跳。
  */
 int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
                                            uint32_t u32SystemTimeMs,
@@ -313,7 +420,9 @@ int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
                                            uint16_t u16MaxRpm,
                                            uint16_t u16MinRpm,
                                            S_MOTOR_STEP_TIME_T *psStepTime,
-                                           uint8_t u8CurveIndex);
+                                           uint8_t u8CurveIndex,
+                                           bool bReverse,
+                                           uint8_t u8DecelCurveIndex);
 #endif
 
 /**
