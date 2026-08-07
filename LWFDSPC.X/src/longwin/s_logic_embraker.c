@@ -62,6 +62,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         bool bReverseEdgeDetected,
                                         bool bRollbackDetected,
                                         bool bBrakeSwOn,
+                                        bool bELockActive,
                                         uint32_t u32CurrentTimeMs) {
     E_EMBRAKER_ACTION eAction = EMBRAKER_ACTION_NONE;
     E_EMBRAKER_STATE eNextState = s_eCurrentState;
@@ -106,7 +107,11 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     if (!bIsActive) {
                         s_bRollbackLatched = false;  // 鬆油門解閂;之後回歸正常運轉前檢查流程
                     }
-                } else if (bIsActive) {
+                } else if (bIsActive && !bELockActive) {
+                    // [e-lock] 段位 0 時不進行運轉前檢查、不放開煞車 —— 電子鎖車。
+                    //   正常情況下段位 0 的命令已在油門模組歸零，bIsActive 本就是 false;
+                    //   這道 !bELockActive 是防護性的第二層，確保任何來源的非零命令都無法解鎖。
+                    //   段位切回 1~5 後 bELockActive 轉為 false，此分支恢復正常運轉前檢查流程。
                     // 收到運轉指令，現在檢查IEMB
                     if (u16IembMv < EMBRAKER_FAULT_THRESHOLD_MV) {
                         // 運轉前檢查失敗，進入故障狀態
@@ -141,7 +146,9 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                 break;
 
             case EMBRAKER_STATE_WAITING_TO_LOCK:
-                if (bIsActive) {
+                if (bIsActive && !bELockActive) {
+                    // [e-lock] 段位 0 時不得由此分支放開煞車，否則「切到 0 段 → 減速中」的途中
+                    //   若有非零命令殘留，會在即將鎖定前又把煞車放掉。理由同 LOCKED 分支。
                     // 在鎖定前又重新給予指令，直接回到釋放狀態 (無需再次檢查IEMB)
                     eAction = EMBRAKER_ACTION_RELEASE;
                     eNextState = EMBRAKER_STATE_RELEASED;

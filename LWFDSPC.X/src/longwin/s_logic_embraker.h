@@ -82,6 +82,12 @@ bool logic_embraker_init(uint16_t u16IembMv);
  *                          → 立即鎖定並閂鎖至鬆油門。RELEASED、WAITING_TO_LOCK 兩個狀態都會檢查。
  * @param bBrakeSwOn        [IBKS] 手剎車/充電中訊號作用中 (RC12 為 Low → uGF.BrakeSWOn==1)。
  *                          為 true 時**立即鎖定**，不經 UVW 延遲也不等 timeout failsafe。
+ * @param bELockActive      [e-lock] 助力段位 0 (電子鎖車) 作用中。
+ *                          與 bBrakeSwOn **刻意不同**：不做立即鎖定，只禁止 LOCKED 狀態放開煞車。
+ *                          段位 0 時油門命令已在 s_logic_throttle.c 被歸零，停車鏈會自行平順地
+ *                          減速→UVW 短路→鎖定；若在此改成立即鎖定，騎行中切到 0 段就會帶速硬鎖。
+ *                          本旗標的作用是防護性的：即使未來有其他路徑注入非零命令，段位 0 也絕不
+ *                          放開煞車。
  * @param u32CurrentTimeMs  目前的系統時間 (毫秒)
  * @return E_EMBRAKER_ACTION 應對煞車硬體執行的動作
  */
@@ -92,6 +98,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         bool bReverseEdgeDetected,
                                         bool bRollbackDetected,
                                         bool bBrakeSwOn,
+                                        bool bELockActive,
                                         uint32_t u32CurrentTimeMs);
 
 /**

@@ -171,6 +171,33 @@ int8_t logic_throttle_getUpdateParams(S_MOTOR_STEP_TIME_T *psStepTime,
         }
     }
 
+    // 段位索引邊界夾制。LCD 經 Modbus 送來的助力段位是 4-bit (u8WheelCfgLo & 0x0F) = 0~15,
+    //   但 su16ThrottleAssistLevelOutputMax[] 只有 THROTTLE_ASSIST_LEVEL_COUNT(6) 筆 ——
+    //   段位 6~15 會讀到陣列外的記憶體。夾到最高段位，行為等同段位 5。
+    if (u8AssistLevel >= THROTTLE_ASSIST_LEVEL_COUNT) {
+        u8AssistLevel = THROTTLE_ASSIST_LEVEL_COUNT - 1u;
+    }
+
+    // [e-lock] 助力段位 0 = 電子鎖車：前進與倒退皆完全禁止，並讓 EMB 鎖住馬達。
+    //   必須在此早退，不能只靠段位上限表的第 0 筆(值為 0) —— 下游有三道 OUTPUT_MIN 地板會把
+    //   它釘回起步速度 1500 count (1.04 km/h)，這正是原本「段位 0 仍以 1 km/h 潛行」的 bug:
+    //     (1) 「確保動態上限不低於下限」的保護把上限 0 提升成 OUTPUT_MIN;
+    //     (2) 線性內插後的 `< u16OutputMin` 地板;
+    //     (3) 加速時的 `u16CurrentRpm < u16OutputMin` 地板。
+    //   不分方向判斷，故一次同時擋掉前進與倒退(反轉是「無號大小 + uGF.DirSW」模型，沒有負命令)。
+    //
+    //   目標歸零後，「減速到停 → UVW 短路 → 夾 EMB」由既有停車鏈自動完成，不需要新的立即鎖定
+    //   分支；EMB 也會因 _isMotorCommandActive(0)==false 而不再放開煞車。因此騎行中切到 0 段是
+    //   平順減速到停後才鎖，不會帶速硬鎖。
+    //
+    //   減速曲線取自正常減速表(而非 LOGIC_THROTTLE_FAULT_DECEL_STEP_TIME)，讓停車手感與鬆油門
+    //   一致；回傳 0(成功)讓呼叫端走正常路徑，回傳負值會被當成故障處理。
+    if (u8AssistLevel == 0u) {
+        *pu16TargetRpm = 0;
+        *psStepTime = _throttleGetStepTimeParams(0u, u16CurrentRpm, u16CurrentVoltageMv, eDirection);
+        return 0;
+    }
+
     // 依據電壓計算目標RPM值
     uint16_t u16ThrottleTargetRpm = 0;
     uint16_t u16VoltageMinMv, u16VoltageMaxMv, u16OutputMin, u16OutputMax, u16OutputZero;
