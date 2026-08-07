@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>停車煞車時機與加速曲線 調整說明</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; }
+  h3 { font-size:1rem; margin:15px 0 6px; color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.84rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.8rem; color:#ffd580; word-break:break-all; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  td.id { text-align:center; font-weight:800; color:var(--accent); }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.now td { background:rgba(78,161,255,.08); }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.82rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.76rem; margin-right:5px; }
+  .flow { display:table; width:100%; border-collapse:separate; border-spacing:6px 0; margin:10px 0; }
+  .flow > div { display:table-cell; background:var(--card2); border:1px solid var(--border);
+                border-radius:8px; padding:9px 11px; font-size:.8rem; vertical-align:top; width:20%; }
+  .flow b { color:var(--accent); display:block; font-size:.86rem; margin-bottom:3px; }
+  .flow .hit { border-color:var(--bad); background:rgba(248,81,73,.09); }
+  .flow .hit b { color:#ff9d96; }
+
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:10pt; line-height:1.45; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    table { font-size:8pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.val { color:#7a4b00; }
+    td.f { color:#8a3a00; }
+    td.id { color:#0b5cad; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.now td { background:#eaf2fb !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .k { background:#ffd23f; color:#1a1200; }
+    .flow > div { background:#f5f7fa; border:1px solid #b9c2cc; font-size:7.6pt; }
+    .flow b { color:#0b5cad; }
+    .flow .hit { border-color:#c0271a; background:#ffece9; }
+    .flow .hit b { color:#a11a0f; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>停車煞車時機與加速曲線　調整說明</h1>
+  <p class="sub">LWFDSPC 主控器　韌體 V0.18　|　2026-08-06　|　本文所列參數皆為<b>韌體內建值</b>，調整後需重新燒錄韌體</p>
+
+  <div class="card">
+    <div class="ok"><b>單位換算（看懂以下所有數字的基礎）</b><br>
+      車速 1 pulse ＝ 0.063 km/h（電子煞車判定用的車速單位）　|　速度命令 1 count ＝ 0.00069 km/h<br>
+      最高速度設定 8.29 km/h，<b>實機頂速約 7.2 km/h</b>（受電池母線電壓限制，非加速曲線造成）。</div>
+  </div>
+
+  <!-- ============ 主題一 ============ -->
+  <div class="card">
+    <h2><span class="n">1</span>停車時電磁煞車（EMB）夾得太早</h2>
+
+    <h3>1-1. 目前的停車流程</h3>
+    <div class="flow">
+      <div><b>① 放開油門</b>速度命令開始下降</div>
+      <div><b>② 命令歸零</b>約 0.3～0.5 秒內降到 0，此時車輪仍在滑行</div>
+      <div class="hit"><b>③ 判定「接近靜止」</b>車速低於 <b>0.94 km/h</b> 即認定已停　←　<b>過早的根源</b></div>
+      <div><b>④ 馬達電氣制動</b>三相短路，讓馬達自行減速</div>
+      <div><b>⑤ 夾住 EMB</b>短路後 <b>50 ms</b> 就夾下</div>
+    </div>
+    <div class="danger"><b>「過早」的成因：</b>第 ③ 步認定車已停的門檻是 <b>0.94 km/h</b>，但車在這個速度其實還在滑行；
+      加上第 ⑤ 步只等 50 ms，馬達還沒被電氣制動減速到停，機械煞車就夾了下去 —— 於是出現<b>頓挫感與煞車片異音</b>。</div>
+
+    <h3>1-2. 可調整的參數（依效果大小排序）</h3>
+    <table>
+      <tr><th style="width:38px">順位</th><th style="width:225px">參數</th><th style="width:105px">目前值</th>
+          <th style="width:105px">建議值</th><th>調整後的效果</th></tr>
+      <tr class="hi">
+        <td class="id">1</td>
+        <td><span class="k">主</span><b>認定車已停的車速門檻</b><br><span class="legend">UVW_LOCK_STOP_PULSES</span></td>
+        <td class="val">15<br>（0.94 km/h）</td>
+        <td class="val">5 ～ 8<br>（0.31～0.50 km/h）</td>
+        <td><b>最有效的一顆。</b>降低後必須等車真的更慢才進入夾煞流程，頓挫明顯改善。<br>
+            ⚠ 有反向代價，見 1-4</td></tr>
+      <tr class="hi">
+        <td class="id">2</td>
+        <td><span class="k">主</span><b>電氣制動到夾煞的等待時間</b><br><span class="legend">EMBRAKER_SHORT_TO_LOCK_DELAY_MS</span></td>
+        <td class="val">50 ms</td>
+        <td class="val">150 ～ 300 ms</td>
+        <td>給馬達足夠時間靠三相短路減速到完全靜止，再夾機械煞車。<br>
+            <b>這顆沒有安全代價</b>，是最安全的第一步。缺點僅是停車後煞車鎖住的手感稍慢</td></tr>
+      <tr>
+        <td class="id">3</td>
+        <td><b>放油門後的減速斜率</b><br><span class="legend">正轉減速表（5 段）</span></td>
+        <td class="val">−25 ～ −40<br>（約 0.3～0.5 秒歸零）</td>
+        <td class="val">放緩至<br>−12 ～ −20</td>
+        <td>速度命令慢一點歸零，整個夾煞流程就整體往後延。<br>
+            ⚠ 會同時改變<b>放油門後的滑行手感</b>（變得更「拖」），需與客戶確認可接受</td></tr>
+      <tr>
+        <td class="id">4</td>
+        <td><b>逾時強制夾煞（保護機制）</b><br><span class="legend">EMBRAKER_LOCK_TIMEOUT_MS</span></td>
+        <td class="val">3000 ms</td>
+        <td class="c">建議不動</td>
+        <td>這是「萬一前述流程都沒生效」的最後保險。<b>不是造成過早的原因</b>，調小反而會使煞車更早夾下</td></tr>
+    </table>
+
+    <h3>1-3. 主參數換算表（順位 1）</h3>
+    <table>
+      <tr><th style="width:110px">設定值</th><th style="width:130px">認定已停的車速</th><th>手感</th></tr>
+      <tr><td class="val">3</td><td class="val">0.19 km/h</td><td>幾乎完全靜止才夾，最平順（此為原始設計值）</td></tr>
+      <tr class="hi"><td class="val">5</td><td class="val">0.31 km/h</td><td>平順，仍保有一定的倒溜保護</td></tr>
+      <tr class="hi"><td class="val">8</td><td class="val">0.50 km/h</td><td><b>建議折衷點</b>：頓挫已明顯改善，倒溜保護仍堪用</td></tr>
+      <tr><td class="val">10</td><td class="val">0.63 km/h</td><td>略有頓挫</td></tr>
+      <tr class="now"><td class="val">15</td><td class="val">0.94 km/h</td><td><b>← 目前值。</b>頓挫與異音較明顯</td></tr>
+    </table>
+
+    <h3>1-4. 必須一併理解的取捨</h3>
+    <div class="note"><b>這顆參數目前被設為 15，是為了另一項安全需求：上坡倒溜保護。</b><br>
+      門檻設得高，代表車還在慢慢滾時系統就會判定「已停」並及早夾住煞車 —— 這正是防止車輛在坡道上往後溜的主力機制。
+      <b>若把它調低來改善停車頓挫，上坡時的倒溜保護會同步變弱。</b><br><br>
+      兩者是互相拉扯的關係，無法同時最佳化。建議做法：
+      <b>① 先只調順位 2（等待時間 50 → 200 ms）</b>，這顆沒有安全代價，多數頓挫問題可單靠它解決；
+      <b>② 若仍不足，再把順位 1 由 15 降到 8</b>，並<b>重新確認坡道測試</b>。</div>
+  </div>
+
+  <!-- ============ 主題二 ============ -->
+  <div class="card">
+    <h2><span class="n">2</span>加速曲線</h2>
+
+    <div class="ok"><b>共 5 段曲線可選，目前設定為第 5 段（最快）。</b>
+      曲線編號越大加速越猛。可依車型或客戶偏好在出廠時選定。</div>
+
+    <table>
+      <tr><th style="width:80px">曲線</th><th style="width:130px">加速力道</th>
+          <th style="width:150px">由起步加到滿速所需時間</th><th>適用場合</th></tr>
+      <tr><td class="id">曲線 1</td><td class="val">0.69 km/h/s</td><td class="val">10.7 秒</td><td>最柔和。載重大、需極度平穩，或使用者為長者／行動不便者</td></tr>
+      <tr><td class="id">曲線 2</td><td class="val">1.04 km/h/s</td><td class="val">7.3 秒</td><td>柔和</td></tr>
+      <tr class="hi"><td class="id">曲線 3</td><td class="val">1.38 km/h/s</td><td class="val">5.7 秒</td><td><b>中性</b>。與本機種舊版韌體的加速手感相同，換版本時想保持一致選這段</td></tr>
+      <tr><td class="id">曲線 4</td><td class="val">2.07 km/h/s</td><td class="val">4.0 秒</td><td>偏快</td></tr>
+      <tr class="now"><td class="id">曲線 5</td><td class="val">2.76 km/h/s</td><td class="val">3.2 秒</td><td><b>← 目前值。</b>最快，起步反應最直接</td></tr>
+    </table>
+    <p class="legend">參數名稱：<code>ACCEL_FILTER_CURVE_SELECT</code>（設定 1～5）。時間為由起步速度 1.04 km/h 加到設定最高速 8.29 km/h 的理論值。</p>
+
+    <h3>2-1. 三項配套說明</h3>
+    <table>
+      <tr><th style="width:170px">項目</th><th>說明</th></tr>
+      <tr><td><b>轉折已做平滑處理</b></td>
+        <td>每段曲線都內含一階平滑（約 0.26 秒），起步、到達設定速度、以及切換段位時的<b>速度階躍都會被磨圓</b>，不會有突然一頓的感覺。此平滑不需客戶設定</td></tr>
+      <tr><td><b>起步速度直接預載</b></td>
+        <td>起步瞬間即以 <b>1.04 km/h</b> 起算，不需從 0 慢慢爬升，因此低速起步不會有遲滯感</td></tr>
+      <tr class="hi"><td><b>只影響加速，不影響煞停</b></td>
+        <td><b>本曲線僅作用於加速方向。</b>放油門的減速行為完全不受影響，仍走獨立的減速設定 —— 也就是說<b>調整加速曲線不會改變煞停距離或安全性</b></td></tr>
+    </table>
+
+    <h3>2-2. 常見誤解</h3>
+    <div class="note"><b>「選最快的曲線 5，頂速卻只有 7.2 km/h」</b>—— 這與加速曲線無關。
+      設定最高速為 8.29 km/h，但實機頂速受<b>電池母線電壓</b>限制：電壓約 25 V 時頂速約 7.1 km/h，需達 28 V 以上才能跑到設定值。
+      韌體內<b>沒有</b>額外的限速器。若要提高頂速，方向是電池／供電規格，不是加速曲線或段位上限。</div>
+  </div>
+
+  <!-- ============ 附註 ============ -->
+  <div class="card">
+    <h2><span class="n">3</span>共通注意事項</h2>
+    <table>
+      <tr><th style="width:40px">#</th><th>事項</th></tr>
+      <tr><td class="id">1</td><td>本文所有參數均為<b>韌體編譯時內建</b>，無法由 LCD、App 或現場工具即時修改。變更需重新編譯並燒錄韌體</td></tr>
+      <tr><td class="id">2</td><td>加速曲線亦可改為<b>由通訊協定即時選擇</b>（1～5 段）。目前預設關閉，若客戶需要由 LCD 端切換，可另行開啟，惟需先確認 LCD 送出的段位定義</td></tr>
+      <tr class="hi"><td class="id">3</td><td>調整主題一的順位 1 參數後，<b>務必重做坡道倒溜測試</b>（見 1-4）。僅調順位 2 則無此需求</td></tr>
+      <tr><td class="id">4</td><td>建議調整順序：<b>先改一項、實車確認、再改下一項</b>。同時改動多項會無法判斷是哪一項造成手感變化</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">LWFDSPC 主控器　韌體 V0.18　|　停車煞車時機與加速曲線 調整說明　|　2026-08-06</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V0.16 → V0.19 版本變動對照</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1280px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; }
+  h3 { font-size:1rem; margin:15px 0 6px; color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.82rem; }
+  th,td { border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.8rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.78rem; color:#ffd580; word-break:break-all; }
+  td.old { text-align:center; white-space:nowrap; font-family:Consolas,monospace; color:#ff9d96; }
+  td.new { text-align:center; white-space:nowrap; font-family:Consolas,monospace; color:#7ee787; font-weight:700; }
+  td.id { text-align:center; font-weight:800; color:var(--accent); }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.bad td { background:rgba(248,81,73,.06); }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.8rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .v { display:inline-block; border-radius:4px; padding:0 6px; font-size:.74rem; font-weight:700; }
+  .v.fix  { background:rgba(63,185,80,.15); color:#7ee787; border:1px solid var(--ok); }
+  .v.tune { background:rgba(78,161,255,.15); color:#8fc7ff; border:1px solid var(--accent); }
+  .v.new  { background:rgba(210,153,34,.15); color:#e6c069; border:1px solid var(--warn); }
+  .v.risk { background:rgba(248,81,73,.18); color:#ff9d96; border:1px solid var(--bad); }
+
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:9.5pt; line-height:1.42; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; } h2 { font-size:12pt; } h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    table { font-size:7.6pt; } th,td { padding:3px 5px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.old { color:#a5006e; } td.new { color:#0a6b22; }
+    td.f { color:#8a3a00; } td.id { color:#0b5cad; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.bad td { background:#ffeceb !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .v.fix  { background:#eaf7ec; color:#1a6b28; border-color:#1a7f34; }
+    .v.tune { background:#e6eef8; color:#0b3d75; border-color:#0b5cad; }
+    .v.new  { background:#fff8e6; color:#7a5200; border-color:#d6a400; }
+    .v.risk { background:#ffece9; color:#a11a0f; border-color:#c0271a; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LWFDSPC 版本變動對照　V0.16 → V0.19</h1>
+  <p class="sub">2026-08-07　|　Modbus ID03 <code>0x0015</code>：<code>0x0016</code> → <code>0x0019</code>　|　V0.x 皆為內部測試版</p>
+
+  <div class="card">
+    <div class="ok"><b>本次變動的主線：</b>為改善上坡起步而提高速度環增益（V0.18）→ 副作用是減速頓挫與多個潛伏問題現形 →
+      V0.19 補上減速命令濾波、修好段位 0 電子鎖車、並把停車判定調回原設計值。</div>
+    <p class="legend"><span class="v fix">修正</span>＝bug 修復　<span class="v tune">調校</span>＝參數調整　<span class="v new">新增</span>＝新功能　<span class="v risk">風險</span>＝需實車驗證</p>
+  </div>
+
+  <!-- ===== 1 ===== -->
+  <div class="card">
+    <h2><span class="n">1</span>控制環與騎乘感</h2>
+    <table>
+      <tr><th style="width:52px">類別</th><th style="width:230px">參數</th><th style="width:110px">V0.16</th>
+          <th style="width:110px">V0.19</th><th>影響</th></tr>
+      <tr class="hi"><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">SPEEDCNTR_PTERM</td><td class="old">3000</td><td class="new">5000</td>
+        <td>有效 Kp 1.465 → 2.441（+67%）。上坡起步改善</td></tr>
+      <tr class="hi"><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">SPEEDCNTR_ITERM</td><td class="old">10</td><td class="new">20</td>
+        <td>有效 Ki 加倍。上坡保持力改善；<b>飽和門檻由 2703 降到 1720 馬達RPM</b></td></tr>
+      <tr><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">SPEEDCNTR_OUTMAX</td><td class="old">Q15(0.175)</td><td class="new">Q15(0.5)</td>
+        <td>速度環輸出上限放寬（實際仍由溫控電流上限覆寫）</td></tr>
+      <tr><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">LOGIC_TEMP_CONTROLLER_RATIO_NORMAL</td><td class="old">0.33</td><td class="new">0.35</td>
+        <td>常態電流上限略放寬（LEVEL_1~5 同步上調約 0.02）</td></tr>
+      <tr><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">ACCEL_FILTER_CURVE_SELECT</td><td class="old">4</td><td class="new">5</td>
+        <td>加速曲線改用最快段（2.76 km/h/s、3.2 秒到頂）</td></tr>
+      <tr class="bad"><td class="c"><span class="v new">新增</span></td>
+        <td class="f">DECEL_FILTER_CURVE_*<br>（7 段減速濾波）</td><td class="old">無</td><td class="new">選 2</td>
+        <td><b>本版重點。</b>減速改走「限斜率 + 一階濾波」，消除放油門與換段的命令階躍。
+            現選曲線 2（R=30、800 ms 全程）。詳見第 2 節</td></tr>
+      <tr><td class="c"><span class="v new">新增</span></td>
+        <td class="f">REV_ACCEL_FILTER_*<br>REV_DECEL_FILTER_*</td><td class="old">無</td><td class="new">獨立參數</td>
+        <td>反轉不再沿用正轉的加速曲線。<b>預設值刻意等於 V0.18 實際行為</b>，本版反轉手感不變</td></tr>
+    </table>
+    <div class="note"><b>反轉的既有落差（V0.16 起就存在，本版僅使其可控）：</b>加速濾波導入時呼叫端沒有方向閘門，
+      反轉一直吃正轉的加速曲線（R=8、預載 1500），使反轉 0→2.76 km/h 由原 step/time 表意圖的 5～8 秒變成約 <b>0.63 秒</b>，
+      且一踩就跳到反轉滿速的 38%。本版把參數獨立出來，日後要調回原手感只需改 <code>REV_ACCEL_FILTER_RATE</code> 與 <code>REV_ACCEL_FILTER_START_CMD</code>。</div>
+  </div>
+
+  <!-- ===== 2 ===== -->
+  <div class="card">
+    <h2><span class="n">2</span>減速濾波（V0.19 新增）</h2>
+    <p class="legend">全程 = 12000 counts（8.29 km/h = 2.30 m/s）降到 0。原 step/time 減速表為速度相依的 −25～−40 counts/ms。</p>
+    <table>
+      <tr><th style="width:60px">曲線</th><th style="width:70px">R</th><th style="width:90px">counts/ms</th>
+          <th style="width:80px">全程</th><th style="width:100px">K (τ)</th><th style="width:90px">制動距離*</th><th>備註</th></tr>
+      <tr><td class="id">1</td><td class="c">20</td><td class="c">10</td><td class="c">1200 ms</td><td class="c">6 (128 ms)</td><td class="c">1.38 m</td><td>最柔</td></tr>
+      <tr class="hi"><td class="id">2</td><td class="c">30</td><td class="c">15</td><td class="c">800 ms</td><td class="c">5 (64 ms)</td><td class="c">0.92 m</td><td><b>← V0.19 現值</b></td></tr>
+      <tr><td class="id">3</td><td class="c">40</td><td class="c">20</td><td class="c">600 ms</td><td class="c">5 (64 ms)</td><td class="c">0.69 m</td><td>—</td></tr>
+      <tr><td class="id">4</td><td class="c">50</td><td class="c">25</td><td class="c">480 ms</td><td class="c">5 (64 ms)</td><td class="c">0.55 m</td><td>＝原表最慢段（−25）</td></tr>
+      <tr><td class="id">5</td><td class="c">64</td><td class="c">32</td><td class="c">375 ms</td><td class="c">4 (32 ms)</td><td class="c">0.43 m</td><td>≈原表中間值</td></tr>
+      <tr><td class="id">6</td><td class="c">80</td><td class="c">40</td><td class="c">300 ms</td><td class="c">4 (32 ms)</td><td class="c">0.35 m</td><td>＝原表最快段（−40）</td></tr>
+      <tr><td class="id">7</td><td class="c">100</td><td class="c">50</td><td class="c">240 ms</td><td class="c">3 (16 ms)</td><td class="c">0.28 m</td><td>最猛</td></tr>
+    </table>
+    <p class="legend">* 制動距離 = ½ × 2.30 m/s × 全程，假設車速跟得上命令。<b>理論值，實車會更長。</b></p>
+    <div class="danger"><b>柔順度與制動距離是直接取捨。</b>現值曲線 2 的制動距離約為原本（≈曲線 5）的 <b>2.1 倍</b>。
+      這是本版<b>最需要實車量測</b>的項目 —— 見第 5 節測試表第 1 項。</div>
+    <div class="note"><b>為何減速的 K 必須遠小於加速的 K：</b>加速全程約 3200 ms，τ=256 ms 只佔 8%，磨圓了但延遲感覺不出來；
+      減速全程僅 240～1200 ms，同樣的 τ 會佔一半以上，停車時間會加倍。故減速 K 取 3～6（τ=16～128 ms），
+      維持「τ／全程」比例在 7～13%。<b>這是加速與減速不能共用參數的量化理由。</b></div>
+  </div>
+
+  <!-- ===== 3 ===== -->
+  <div class="card">
+    <h2><span class="n">3</span>停車與電磁煞車（EMB）</h2>
+    <table>
+      <tr><th style="width:52px">類別</th><th style="width:230px">參數</th><th style="width:100px">V0.16</th>
+          <th style="width:100px">V0.18</th><th style="width:100px">V0.19</th><th>影響</th></tr>
+      <tr class="hi"><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">UVW_LOCK_STOP_PULSES</td><td class="old">3</td><td class="c">15</td><td class="new">3</td>
+        <td>「車已停」的判定車速。V0.18 的 15＝0.94 km/h 使 EMB 在車還在滾時就進入夾煞流程（<b>頓挫與煞車片異音</b>）。
+            V0.19 調回原設計值 0.19 km/h</td></tr>
+      <tr class="hi"><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">EMBRAKER_RELEASE_THRESHOLD_FWD / REV</td><td class="old">1600</td><td class="c">800</td><td class="new">800</td>
+        <td>煞車釋放門檻。1600→800 使段位 0 的 1500 命令由「不算命令」變成「算命令」→ 潛行問題現形（見第 4 節）</td></tr>
+      <tr><td class="c"><span class="v fix">修正</span></td>
+        <td class="f">倒溜偵測計數方式</td><td class="old">連續</td><td class="c">淨</td><td class="new">淨</td>
+        <td>同向邊緣由「歸零」改為「−1（地板 0）」。上坡拉鋸時連續計數會被一再歸零而永不觸發</td></tr>
+      <tr><td class="c"><span class="v fix">修正</span></td>
+        <td class="f">倒溜計數於 LOCK / RELEASE 清零</td><td class="old">無</td><td class="c">有</td><td class="new">有</td>
+        <td>計數器只在霍爾邊緣中斷更新，車靜止時凍結 → 不清零會導致「重新給油門立刻重鎖」的卡死</td></tr>
+      <tr class="bad"><td class="c"><span class="v risk">風險</span></td>
+        <td class="f">EMB_ROLLBACK_REV_EDGES</td><td class="old">3</td><td class="c">90</td><td class="new">90</td>
+        <td>3＝5.2 mm、90＝157 mm（規格上限 91 邊緣＝159 mm）。
+            <b>UVW 判定調回 3 後，這是唯一的上坡倒溜防線</b></td></tr>
+      <tr><td class="c"><span class="v tune">調校</span></td>
+        <td class="f">EMB_ROLLBACK_CMD_THRESHOLD</td><td class="old">500</td><td class="c">100</td><td class="new">100</td>
+        <td>倒溜偵測的武裝門檻，0.35 → 0.069 km/h</td></tr>
+      <tr><td class="c"><span class="v c">—</span></td>
+        <td class="f">EMBRAKER_SHORT_TO_LOCK_DELAY_MS<br>EMBRAKER_LOCK_TIMEOUT_MS</td>
+        <td class="c" colspan="3">50 ms / 3000 ms（未變）</td>
+        <td>若停車頓挫仍在，<b>加大 50 ms 是最安全的第一步</b>（無安全代價）</td></tr>
+    </table>
+    <div class="danger"><b>本版最需要坡道測試的組合：</b><code>UVW_LOCK_STOP_PULSES</code> 由 15 調回 3 改善了停車頓挫，
+      但也移除了「及早夾煞」這條倒溜防線。現在完全依賴 <code>EMB_ROLLBACK_REV_EDGES = 90</code>（157 mm）的淨邊緣偵測。
+      <b>坡道行為必須重測。</b>若倒溜量不可接受，把 90 往下調（例如 16＝28 mm）。</div>
+  </div>
+
+  <!-- ===== 4 ===== -->
+  <div class="card">
+    <h2><span class="n">4</span>Bug 修正</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:210px">問題</th><th>V0.16 的實際行為</th><th style="width:290px">V0.19 修正方式</th></tr>
+      <tr class="hi"><td class="id">1</td><td><b>段位 0 仍以 1 km/h 前進<br>（e-lock）</b></td>
+        <td>油門送出 1500 counts（1.04 km/h）。V0.16 因釋放門檻 1600 使 EMB 保持夾住，<b>車不動但馬達頂著煞車堵轉</b>
+            （互鎖只在「EMB 鎖定且目標為 0」才切斷出力）。門檻降到 800 後變成真的潛行。倒退則完全不受段位管制</td>
+        <td>段位 0 直接把目標歸零並繞過三道 <code>OUTPUT_MIN</code> 地板；不分方向，前進與倒退一次擋掉。
+            EMB 新增 <code>bELockActive</code> 閘門，任何命令來源都無法在段位 0 放開煞車。
+            <b>刻意不做立即硬鎖</b> —— 行進中切到 0 段會平順減速到停後才鎖</td></tr>
+      <tr><td class="id">2</td><td><b>段位索引越界讀取</b></td>
+        <td>LCD 經 Modbus 送 4 bit（0～15），段位上限表只有 6 筆，索引前無邊界檢查 → 段位 6～15 讀取陣列外記憶體</td>
+        <td>夾到 <code>THROTTLE_ASSIST_LEVEL_COUNT - 1</code>，段位 6～15 行為等同段位 5</td></tr>
+      <tr class="hi"><td class="id">3</td><td><b>靜止時 Speed 未歸零</b></td>
+        <td><code>MotorStartSpeedPulses</code> 初始化為 0 且全檔無賦值 → <code>if (HallPulsesLatch &lt; 0)</code> 恆為假，
+            這道保護<b>從未生效</b>。停車時最後一個霍爾邊緣若解碼成反向（夾煞回彈易造成），Speed 保持負值
+            （X2CScope 實測 −900 ＝ −0.62 km/h）直到 T1 逾時 840 ms。期間命令已為 0 而實測為負 → 速度環命令馬達往前出力</td>
+        <td>設為 3（100 馬達RPM ＝ 0.19 km/h），與上方兩個 ReGen 門檻同一刻度。殘值於一個 latch 週期（100 ms）內清除</td></tr>
+      <tr><td class="id">4</td><td><b>倒溜偵測拉鋸失效</b></td>
+        <td>連續計數遇同向邊緣即歸零。上坡與重力拉鋸（倒溜→推前一小段→再倒溜）每循環歸零，淨位移早已超標卻永不觸發</td>
+        <td>改為淨計數（反向 +1、正向 −1、地板 0）</td></tr>
+      <tr><td class="id">5</td><td><b>A04 / A19 警報碼對調</b></td>
+        <td>EMB 感測器異常掛在 A19、馬達霍爾異常掛在 A04，與規格相反</td>
+        <td>兩者對調回正確位置；Modbus LCD 錯誤暫存器補上 EMB 故障位元（bit 4）</td></tr>
+    </table>
+  </div>
+
+  <!-- ===== 5 ===== -->
+  <div class="card">
+    <h2><span class="n">5</span>實車測試清單</h2>
+    <p class="legend">目前狀態：全部項目<b>皆已編譯通過但未實車驗證</b>（僅減速斜率與命令歸零已用 X2CScope 確認波形）。</p>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:250px">測項</th><th>判定</th></tr>
+      <tr class="bad"><td class="id">1</td><td><b>全速放油門的制動距離</b></td>
+        <td><b>最重要的安全迴歸。</b>與 V0.18 對比，現值曲線 2 理論上約為 2.1 倍。不可接受就把 <code>DECEL_FILTER_CURVE_SELECT</code> 往大調（3～5）</td></tr>
+      <tr class="bad"><td class="id">2</td><td><b>坡道倒溜量</b></td>
+        <td>UVW 判定調回 3 後唯一防線是 <code>EMB_ROLLBACK_REV_EDGES = 90</code>（157 mm）。超過可接受範圍就往下調</td></tr>
+      <tr class="bad"><td class="id">3</td><td>段位 0（e-lock）</td>
+        <td>靜止＋滿油門、前進與倒退皆<b>完全不動</b>；EMB 保持夾住；切回段位 3 能正常起步（確認不會卡死在鎖定）</td></tr>
+      <tr><td class="id">4</td><td>行進中切到段位 0</td><td>應平順減速到停，<b>不可有帶速硬鎖的頓挫</b></td></tr>
+      <tr><td class="id">5</td><td>停車頓挫與煞車片異音</td><td>應明顯改善（<code>UVW_LOCK_STOP_PULSES</code> 15→3 的目的）</td></tr>
+      <tr><td class="id">6</td><td>減速曲線確實生效</td><td>切曲線 1 與 7，全程應有 1200 ms vs 240 ms 的明顯差異。<b>已用 X2CScope 確認曲線 3 為 390 ms（理論 375 ms）</b></td></tr>
+      <tr><td class="id">7</td><td>命令確實到 0</td><td>X2CScope 看 <code>g_i16ScopeCmdOut</code> 必須觸及 0。<b>已確認</b></td></tr>
+      <tr><td class="id">8</td><td>上坡起步</td><td>維持 V0.18 調校後的水準（增益未再變動）</td></tr>
+      <tr><td class="id">9</td><td>段位 1～5 上限</td><td>2.76 / 4.15 / 5.53 / 6.91 / 8.29 km/h，未受影響</td></tr>
+      <tr><td class="id">10</td><td>Modbus 版本回報</td><td>ID03 位址 <code>0x0015</code> 應回 <code>0x0019</code></td></tr>
+    </table>
+    <p class="legend">X2CScope 建議觀測：<code>g_i16ScopeCmdTarget</code>、<code>g_i16ScopeCmdRateLim</code>、<code>g_i16ScopeCmdOut</code>、
+      <code>piInputOmega.inMeasure</code>、<code>uGF.UVWLock</code>、<code>g_u8ELockActive</code>。</p>
+  </div>
+
+  <!-- ===== 6 ===== -->
+  <div class="card">
+    <h2><span class="n">6</span>已知未解決事項</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:230px">項目</th><th>說明</th></tr>
+      <tr class="hi"><td class="id">1</td><td><b>全速時 600 counts 的穩態落差</b></td>
+        <td>X2CScope 實測命令 12000 而 <code>inMeasure</code> 停在 11400（7.87 vs 8.29 km/h）。帶積分項的 PI 若未飽和，穩態誤差應趨近 0，
+            故這是<b>輸出飽和的指紋</b>。待確認來源是母線電壓不足（已知 25 V 只到約 7.1 km/h）或溫控電流上限夾制 ——
+            scope 加看 <code>piOutputOmega.out</code> 是否貼在 <code>piInputOmega.piState.outMax</code> 上即可分辨</td></tr>
+      <tr><td class="id">2</td><td>step/time 表已成死參數</td>
+        <td>濾波啟用時（<code>CODESW_THROTTLE_ACCEL_FILTER_ENABLE = 1</code>），
+            <code>THROTTLE_FWD/REV_ACCEL/DECEL_STEP_TIME_ENTRY_*</code> 每週期仍在計算但<b>不生效</b>，調整無任何效果。
+            實際斜率見減速濾波與加速濾波曲線表。程式碼與表完整保留，旗標設 0 即整套退回</td></tr>
+      <tr><td class="id">3</td><td><code>LOGIC_THROTTLE_FAULT_DECEL_STEP_TIME</code> 從未套用</td>
+        <td>油門故障時回傳負值，而呼叫端的 <code>if (i8ThrottleResult == 0)</code> 沒有 else 分支 → 馬達斜坡函式根本不會被呼叫</td></tr>
+      <tr><td class="id">4</td><td><code>UVW_LOCK_SPEED_THRESHOLD</code><br><code>UVW_LOCK_CURRENT_THRESHOLD</code></td>
+        <td>現行程式 0 處引用，純殘留巨集。調整無效果</td></tr>
+      <tr><td class="id">5</td><td>溫控電流上限的刻度落差</td>
+        <td>變數名為「電流上限」，實際被用來夾<b>電壓</b>參考 <code>qVqRef</code>。與第 1 項可能相關</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">LWFDSPC　V0.16 → V0.19 版本變動對照　|　2026-08-07　|　Modbus ID03 0x15 = 0x0019</p>
+</div>
+</body>
+</html>

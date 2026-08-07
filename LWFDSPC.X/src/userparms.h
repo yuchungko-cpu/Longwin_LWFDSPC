@@ -195,13 +195,22 @@ minimum value accepted */
  * 【重要】速度環的誤差 (inReference - inMeasure) 是 Q15 命令 count，其物理意義由
  *   motor_scale.h 的 SPEED_FS_RPM 決定。因此下列增益與 SPEED_FS_RPM 成反比綁定：
  *     SPEEDCNTR_PTERM 為 Q1.11 格式 (見 motor_control_declarations.h)，
- *     有效 Kp = 3000/2048 = 1.465 (輸出 count / 誤差 count)
- *             = 每 1 馬達RPM 誤差產生 4.0 counts 的 Iq 命令
- *     有效 Ki = 10/32768，速度環 1kHz → 每 1 count 誤差每 ms 累加 3.05e-4
+ *     有效 Kp = 5000/2048 = 2.441 (輸出 count / 誤差 count)
+ *             = 每 1 馬達RPM 誤差產生 6.7 counts 的 Iq 命令
+ *     有效 Ki = 20/32768，速度環 1kHz → 每 1 count 誤差每 ms 累加 6.10e-4
  *   若改動 SPEED_FS_RPM，兩者必須同乘 (舊FS/新FS) 才能維持相同騎乘感。
  *   motor_scale.h 的 HALL_MIN_PERIOD != 434 護欄即為此而設。
- * 飽和門檻：outMax 由溫控電流上限覆寫 (常態 Q15(0.33)=10813)，
- *   → 誤差 >= 10813/1.465 = 7382 counts (2703 馬達RPM) 即滿輸出。
+ * 飽和門檻：outMax 由溫控電流上限覆寫 (常態 Q15(0.35)=11469)，
+ *   → 誤差 >= 11469/2.441 = 4699 counts (1720 馬達RPM) 即滿輸出。
+ *   ⚠ 增益提高後飽和門檻由 2703 降到 1720 馬達RPM，更容易貼上限 —— X2CScope 實測
+ *     全速時 inMeasure 停在 11400 count 而命令 12000，那 600 count 的穩態落差就是
+ *     輸出飽和的指紋 (帶積分項的 PI 若未飽和，穩態誤差應趨近 0)。
+ *     待確認飽和來源是母線電壓不足或溫控夾制：scope 看 piOutputOmega.out 是否貼在
+ *     piInputOmega.piState.outMax 上。
+ *
+ * ⚠ 下方是 #if 0 / #else：live 值是 #else 那組 (PTERM 5000 / ITERM 20)。
+ *   V0.16 為 3000 / 10，於 bcc1671 為改善上坡起步而提高 (Kp +67%、Ki +100%)。
+ *   副作用：減速命令的階躍被忠實放大成頓挫 → 因此 V0.19 補上減速命令濾波。
  */
 #if 0
 #define SPEEDCNTR_PTERM Q15(0.2)
