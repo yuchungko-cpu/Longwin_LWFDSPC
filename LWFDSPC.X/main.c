@@ -243,6 +243,9 @@ unsigned int HallPulsesCntr = 0;
 // 1 邊緣 = 車輪 1.75 mm，門檻見 userparms.h 的 EMB_ROLLBACK_REV_EDGES。
 // ⚠ 只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE 動作處必須清零(見該處註解)。
 volatile uint8_t g_u8EmbRevEdgeCnt = 0;
+// [e-lock] 助力段位 0 (電子鎖車) 是否作用中。1 = 段位 0，油門已被歸零且 EMB 不會放開。
+// 純觀測用 (X2CScope)，不參與任何控制判斷 —— 控制邏輯各自直接讀 u8AssistLevel。
+volatile uint8_t g_u8ELockActive = 0;
 const int16_t PhaseValues[8] = {0, 0, -21844, -10922, 21844, 10922, 32767, 0};
 signed int TempVar;     // main loop
 signed int Ibus = 0;     // 瞬時 DC bus 電流 (Q15，與 iabc 同刻度；313.3 counts/A)
@@ -329,7 +332,17 @@ signed int MotorStartSpeed = Q15(0.01);
 // 換算 (18 邊緣/機械轉, 齒比 20.3)：1 pulse/100ms = 33.3 馬達RPM = 0.063 km/h
 signed int BrakeStartSpeedPulses = 15;  // 500 馬達RPM = 0.95 km/h 以上才允許 ReGen
 signed int BrakeStopSpeedPulses = 7;    // 233 馬達RPM = 0.44 km/h 以下停止 ReGen
-signed int MotorStartSpeedPulses = 0;
+// [BUGFIX] 原本初始化為 0 且全檔沒有任何執行期賦值，於是 main.c 的
+//   `if (HallPulsesLatch < MotorStartSpeedPulses) Speed = 0;` 恆為假 ——
+//   「靜止時把 Speed 歸零」這道保護從來沒有生效過。
+//   後果 (X2CScope 實測)：停車時最後一個霍爾邊緣若被解碼成反向 (夾煞車回彈很容易造成)，
+//   Speed 就保持該負值 (實測 -900 = -0.62 km/h)，唯一能清掉它的是 T1 逾時 20x42ms = 840ms。
+//   這 840ms 內命令已是 0 而 inMeasure 為負 → 速度環看到正誤差 → 命令馬達往前出力,
+//   只能靠 UVW 短路/EMB 先接手壓住,是時序運氣而非設計。
+//   取 3 的理由：與上面兩個 ReGen 門檻同一刻度 (1 脈衝/100ms = 33.3 馬達RPM)，
+//   3 是能可靠濾掉靜止抖動的最小值。不影響 EMB 倒溜偵測 (那個看 uGF.Direction 逐邊緣，
+//   不看 Speed)，也不影響 UVW lock (看 HallPulsesLatch)。
+signed int MotorStartSpeedPulses = 3;   // 100 馬達RPM = 0.19 km/h 以下視為靜止
 unsigned int MOSFET_OverTemp = OVERTEMP_MOSFET_90;
 unsigned long ThrottleHighCntr = 0;  // used to start/stop
 unsigned int LEDFlashCntr = 0;
@@ -1398,6 +1411,13 @@ int main(void) {
                                             !bEmbFlipHoldoff &&
                                             (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES);
 
+                // [e-lock] 助力段位 0 = 電子鎖車。段位由 LCD 經 Modbus 在執行期更新
+                //   (modbusDecode_decodeLcdData)，故騎行中切段位會即時生效。
+                //   油門命令的歸零在 s_logic_throttle.c 完成；此旗標只是禁止 EMB 放開煞車的
+                //   第二層防護，刻意不做立即鎖定(否則帶速切 0 段會硬鎖)。
+                bool bEmbELockActive = (g_stSystemData.sSharedData.u8AssistLevel == 0u);
+                g_u8ELockActive = bEmbELockActive ? 1u : 0u;  // X2CScope 觀測
+
                 E_EMBRAKER_ACTION eBrakeAction = logic_embraker_update(g_stSystemData.u16IEMBMv,
                                                                        g_stSystemData.i16TargetRpm,  // 使用者意圖轉速
                                                                        ReferenceRAW,                 // 馬達實際執行轉速
@@ -1405,6 +1425,7 @@ int main(void) {
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
                                                                        bEmbRollbackDetected,         // [有動力倒溜] 連續反向霍爾邊緣達門檻
                                                                        (uGF.BrakeSWOn == 1),         // [IBKS] 手剎車/充電中 → 立即鎖定
+                                                                       bEmbELockActive,              // [e-lock] 段位 0 → 禁止放開煞車
                                                                        g_stSystemData.u32TimeMs);
 
                 // --- [NEW] Final safety check to override brake action ---
@@ -1908,6 +1929,9 @@ void DoControl(void) {
                 uint16_t u16lThrottleOutputMax = 0;
                 uint16_t u16lThrottleOutputMin = 0;
 
+                // 注意：這兩個是方向決定的**固定**上下限，段位上限只在 s_logic_throttle.c 內生效。
+                //   OutputMin 只在「加速中」的分支作為地板 (見 logic_motor_getUpdateParams)，
+                //   目標為 0 時走減速分支，不會被墊高 —— e-lock 因此不需要在這裡另外處理。
                 if (g_stSystemData.bMotorDirection == 0) {
                     u16lThrottleOutputMax = LOGIC_THROTTLE_FWD_OUTPUT_MAX;
                     u16lThrottleOutputMin = LOGIC_THROTTLE_FWD_OUTPUT_MIN;
@@ -1920,9 +1944,10 @@ void DoControl(void) {
                 // 注意：此處呼叫舊的無正負號函式，因此傳入 abs() 值並強制轉型指標
 
 #if CODESW_THROTTLE_ACCEL_FILTER_ENABLE == 1
-                // 新加速方式：限斜率 + 一階濾波。曲線在程式內選定 (ACCEL_FILTER_CURVE_SELECT)，
-                //   與原本的 step/time 曲線一樣不吃外部參數。
-                //   只影響加速；目標為 0 或需減速時，函式內部會轉回原本的 step/time 減速表。
+                // 限斜率 + 一階濾波。曲線在程式內選定，與原本的 step/time 曲線一樣不吃外部參數。
+                //   加速用 ACCEL_FILTER_CURVE_SELECT、減速用 DECEL_FILTER_CURVE_SELECT
+                //   (兩者獨立 —— 減速是安全相關行為,不跟著使用者選的加速段位走)。
+                //   反轉走 REV_*_FILTER_* 那組獨立參數,不再意外沿用正轉的加速曲線。
 #if ACCEL_FILTER_CURVE_FROM_MODBUS == 1
                 uint8_t u8lAccelCurveIndex = (uint8_t)g_stSystemData.sSharedData.eAccelCurve;
 #else
@@ -1933,10 +1958,12 @@ void DoControl(void) {
                         g_stSystemData.u32TimeMs,
                         u16lCurrentRpm,
                         u16lTargetRpm,
-                        u16lThrottleOutputMax,  // 最大轉速限制 (段位決定)
-                        u16lThrottleOutputMin,  // 最小轉速限制
+                        u16lThrottleOutputMax,  // 最大轉速限制 (方向決定的固定上限,非段位)
+                        u16lThrottleOutputMin,  // 最小轉速限制 (僅加速時作為地板)
                         &g_stSystemData.sStepTime,
-                        u8lAccelCurveIndex);
+                        u8lAccelCurveIndex,
+                        (g_stSystemData.bMotorDirection != 0),  // 反轉 → 用 REV_* 獨立參數
+                        DECEL_FILTER_CURVE_INDEX_DEFAULT);      // 減速曲線,獨立於加速段位
 #else
                 i8MotorResult = logic_motor_getUpdateParams(&u16MotorActiveRpm,
                                                             g_stSystemData.u32TimeMs,

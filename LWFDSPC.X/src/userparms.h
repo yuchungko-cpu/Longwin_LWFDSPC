@@ -260,7 +260,7 @@ minimum value accepted */
 // 換算 (18 邊緣/機械轉, 齒比 20.3)：1 pulse/100ms = 33.3 馬達RPM = 0.063 km/h
 //   → 3 pulses = 100 馬達RPM = 0.19 km/h  (舊註解「7≈馬達58RPM, 極對數12」已失效)
 // 獨立於 ReGen 的 BrakeStopSpeedPulses，調此值不影響 ReGen 起煞點。
-#define UVW_LOCK_STOP_PULSES 15
+#define UVW_LOCK_STOP_PULSES 3
 
 // =============================================================================
 //  有動力倒溜/倒衝偵測 (命令一個方向、車實際往反方向動 → EMB 立即鎖定)
