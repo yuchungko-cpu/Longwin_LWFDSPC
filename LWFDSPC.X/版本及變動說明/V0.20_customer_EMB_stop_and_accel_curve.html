@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>停車煞車時機與加速曲線 調整說明 — V0.20</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --card2:#202d3b; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 18px 70px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:16px 20px 20px; margin:0 0 18px; }
+  h2 { font-size:1.18rem; margin:0 0 10px; }
+  h2 .n { display:inline-block; width:27px; height:27px; line-height:27px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.92rem;
+          margin-right:9px; font-weight:800; }
+  h3 { font-size:1rem; margin:15px 0 6px; color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.84rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.8rem; color:#ffd580; word-break:break-all; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  td.id { text-align:center; font-weight:800; color:var(--accent); }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.now td { background:rgba(78,161,255,.08); }
+  tr.new td { background:rgba(63,185,80,.09); }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:10px 0; font-size:.86rem; }
+  .legend { font-size:.82rem; color:var(--muted); margin:6px 0 0; }
+  .foot { color:var(--muted); font-size:.8rem; text-align:center; margin-top:30px; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.76rem; margin-right:5px; }
+  .tagnew { display:inline-block; background:#3fb950; color:#04210c; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.72rem; margin-right:5px; }
+  .flow { display:table; width:100%; border-collapse:separate; border-spacing:6px 0; margin:10px 0; }
+  .flow > div { display:table-cell; background:var(--card2); border:1px solid var(--border);
+                border-radius:8px; padding:9px 11px; font-size:.8rem; vertical-align:top; width:20%; }
+  .flow b { color:var(--accent); display:block; font-size:.86rem; margin-bottom:3px; }
+  .flow .hit { border-color:var(--ok); background:rgba(63,185,80,.09); }
+  .flow .hit b { color:#7ee787; }
+
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --card2:#f5f7fa; --fg:#111; --muted:#555;
+            --accent:#0b5cad; --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:10pt; line-height:1.45; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:16pt; }
+    h2 { font-size:12pt; }
+    h3 { font-size:10.5pt; color:#0b5cad; }
+    .card { border:1px solid #b9c2cc; box-shadow:none; margin:0 0 9px;
+            padding:10px 13px 12px; break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    table { font-size:8pt; }
+    th,td { padding:4px 6px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.val { color:#7a4b00; }
+    td.f { color:#8a3a00; }
+    td.id { color:#0b5cad; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.now td { background:#eaf2fb !important; }
+    tr.new td { background:#eaf7ec !important; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .danger { background:#ffece9; border-left-color:#c0271a; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .k { background:#ffd23f; color:#1a1200; }
+    .tagnew { background:#1a7f34; color:#fff; }
+    .flow > div { background:#f5f7fa; border:1px solid #b9c2cc; font-size:7.6pt; }
+    .flow b { color:#0b5cad; }
+    .flow .hit { border-color:#1a7f34; background:#eaf7ec; }
+    .flow .hit b { color:#14672a; }
+    .sub,.legend,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>停車煞車時機與加速曲線　調整說明</h1>
+  <p class="sub">LWFDSPC 主控器　韌體 <b>V0.20</b>　|　2026-08-13　|　本文所列參數皆為<b>韌體內建值</b>，調整後需重新燒錄韌體　|　取代 V0.18 版本</p>
+
+  <div class="card">
+    <div class="ok"><b>單位換算（看懂以下所有數字的基礎）</b><br>
+      車速 1 pulse ＝ 0.063 km/h（電子煞車判定用的車速單位）　|　速度命令 1 count ＝ 0.00069 km/h<br>
+      <b>車輪位移 1 個霍爾邊緣 ＝ 1.75 mm</b>（倒溜與下坡滑動的判定單位）<br>
+      最高速度設定 8.29 km/h，<b>實機頂速約 7.2 km/h</b>（受電池母線電壓限制，非加速曲線造成）。</div>
+
+    <h3>本版相對 V0.18 的主要差異</h3>
+    <table>
+      <tr><th style="width:200px">項目</th><th style="width:130px">V0.18</th><th style="width:130px">V0.20</th><th>說明</th></tr>
+      <tr class="hi"><td>認定車已停的門檻</td><td class="val">0.94 km/h</td><td class="val">0.25 km/h</td>
+        <td>V0.18 客戶反映的「夾太早」已解決。此門檻不再與倒溜保護互相拉扯，見 1-4</td></tr>
+      <tr class="hi"><td>上坡倒溜保護</td><td class="val">靠停車門檻<br>（間接）</td><td class="val">獨立的<br>位移偵測</td>
+        <td>改為直接量「往後滾了幾 mm」，與停車門檻脫鉤 —— <b>這是 1-4 那個取捨消失的原因</b></td></tr>
+      <tr class="new"><td><span class="tagnew">新增</span>下坡滑動偵測</td><td class="val">無</td><td class="val">42 mm 上鎖</td>
+        <td>解決「下坡點一下油門再放掉會往下滑」，見第 2 節</td></tr>
+      <tr><td>加速曲線段數</td><td class="val">5 段</td><td class="val">7 段</td><td>新增更快的曲線 6、7；原 1～5 編號與手感完全不變</td></tr>
+      <tr><td>放油門後的減速</td><td class="val">step/time 表</td><td class="val">濾波 7 段</td><td>V0.19 起改制。舊的減速表已不生效，調它沒有作用</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ 主題一 ============ -->
+  <div class="card">
+    <h2><span class="n">1</span>停車時電磁煞車（EMB）的夾煞時機</h2>
+
+    <h3>1-1. 目前的停車流程（正常平路停車）</h3>
+    <div class="flow">
+      <div><b>① 放開油門</b>速度命令開始下降</div>
+      <div><b>② 命令歸零</b>約 0.8 秒內降到 0（減速曲線 2），此時車輪仍在滑行</div>
+      <div class="hit"><b>③ 判定「已靜止」</b>車速低於 <b>0.25 km/h</b>　←　V0.18 為 0.94 km/h</div>
+      <div><b>④ 馬達電氣制動</b>三相短路，讓馬達自行減速</div>
+      <div><b>⑤ 夾住 EMB</b>短路後 <b>50 ms</b> 夾下</div>
+    </div>
+    <div class="ok"><b>V0.18 的「夾太早」已解決。</b>第 ③ 步的門檻已由 0.94 km/h 降到 <b>0.25 km/h</b>
+      —— 車幾乎完全靜止才會進入夾煞流程，頓挫感與煞車片異音的成因已移除。<br>
+      若實機仍感覺到頓挫，第一顆該調的是第 ⑤ 步的等待時間（見 1-3 順位 1），<b>它沒有任何安全代價</b>。</div>
+
+    <h3>1-2. EMB 上鎖的四條路徑</h3>
+    <p class="legend">EMB 會在下列任一條件成立時夾住。了解這四條的分工，才能判斷實機現象該調哪一顆。</p>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:150px">路徑</th><th style="width:120px">觸發條件</th><th>用途與說明</th></tr>
+      <tr class="hi"><td class="id">1</td><td><b>正常停車</b><br><span class="legend">主路徑</span></td>
+        <td class="val">已靜止<br>→ 短路 → 50 ms</td>
+        <td>平路與一般停車走這條。上面 1-1 的流程</td></tr>
+      <tr><td class="id">2</td><td><b>上坡倒溜</b></td><td class="val">往後滾<br>122 mm</td>
+        <td>命令是前進、車卻往後滾 → 立即夾住。<b>直接量位移，與車速無關</b> —— 再慢的潛行倒溜也會在同樣的距離內被攔下。規格上限為 1/4 車輪 ＝ 159 mm</td></tr>
+      <tr class="new"><td class="id">3</td><td><span class="tagnew">新</span><b>下坡滑動</b></td><td class="val">往前滑<br>42 mm</td>
+        <td>命令已歸零、車卻仍在往前移動 → 立即夾住。<b>V0.20 新增</b>，詳見第 2 節</td></tr>
+      <tr><td class="id">4</td><td><b>逾時保命</b><br><span class="legend">failsafe</span></td><td class="val">命令歸零後<br>1000 ms</td>
+        <td>前三條都沒生效時的最後保險（例如霍爾感測器異常）。<b>刻意不看車速</b>，見 1-4 下方的紅框</td></tr>
+    </table>
+
+    <h3>1-3. 可調整的參數（依效果大小排序）</h3>
+    <table>
+      <tr><th style="width:38px">順位</th><th style="width:235px">參數</th><th style="width:105px">目前值</th>
+          <th style="width:110px">建議調整方向</th><th>調整後的效果</th></tr>
+      <tr class="hi">
+        <td class="id">1</td>
+        <td><span class="k">主</span><b>電氣制動到夾煞的等待時間</b><br><span class="legend">EMBRAKER_SHORT_TO_LOCK_DELAY_MS</span></td>
+        <td class="val">50 ms</td>
+        <td class="val">仍有頓挫則<br>加大到 150～300</td>
+        <td>給馬達足夠時間靠三相短路減速到完全靜止，再夾機械煞車。<br>
+            <b>這顆沒有安全代價</b>，是最安全的第一步。缺點僅是停車後煞車鎖住的手感稍慢。<br>
+            <span class="legend">註：V0.18 版文件即建議調到 150～300，但至今<b>維持 50 ms 未改</b></span></td></tr>
+      <tr>
+        <td class="id">2</td>
+        <td><b>認定車已停的車速門檻</b><br><span class="legend">UVW_LOCK_STOP_PULSES</span></td>
+        <td class="val">4<br>（0.25 km/h）</td>
+        <td class="c">建議不動</td>
+        <td>已從 V0.18 的 15（0.94 km/h）降到 4，頓挫成因已移除。<br>
+            <b>⚠ 不要再往下調到 1。</b>此參數同時被「頂牆／堵轉放開後的保護」共用，設 1 會讓該保護失效
+            —— 曾實測馬達被反向驅動後退 1 公尺以上</td></tr>
+      <tr>
+        <td class="id">3</td>
+        <td><b>放油門後的減速快慢</b><br><span class="legend">DECEL_FILTER_CURVE_SELECT（7 段）</span></td>
+        <td class="val">曲線 2<br>（0.8 秒歸零）</td>
+        <td class="val">要更快停<br>則往大調</td>
+        <td>數字越大減速越猛、制動距離越短。曲線 2 的理論制動距離約 0.92 m，曲線 5 約 0.43 m。<br>
+            <b>⚠ 安全項目</b>：改動後務必實車量測制動距離。<br>
+            <span class="legend">註：V0.19 起減速改走濾波，舊的 step/time 減速表已不生效，調它沒有作用</span></td></tr>
+      <tr>
+        <td class="id">4</td>
+        <td><b>逾時強制夾煞（保護機制）</b><br><span class="legend">EMBRAKER_LOCK_TIMEOUT_MS</span></td>
+        <td class="val">1000 ms</td>
+        <td class="c"><b>不可調</b></td>
+        <td>這是「萬一前述流程都沒生效」的最後保險。<b>不是造成過早的原因</b>。<br>
+            <b>⚠ 見下方紅框 —— 不得為了舒適性而修改</b></td></tr>
+    </table>
+
+    <h3>1-4. V0.18 那個取捨已經消失</h3>
+    <div class="ok"><b>V0.18 版文件曾說明：「認定車已停的門檻設為 15，是為了上坡倒溜保護；調低會讓倒溜保護變弱。」
+      這個取捨在 V0.19 之後<b>已不存在</b>。</b><br><br>
+      倒溜保護已改為<b>獨立的位移偵測</b>（上表路徑 2）：直接數「與命令反方向的車輪位移」，達 122 mm 即夾煞，
+      <b>與車速、與停車門檻完全無關</b>。因此停車門檻可以放心降低到只為停車平順服務，
+      不會犧牲坡道安全 —— 這也是本版能把它設到 0.25 km/h 的原因。<br><br>
+      新的取捨落在別處：倒溜的 122 mm 與規格上限 159 mm 之間的餘裕。上坡起步若一給油門就被夾住，
+      應調大倒溜門檻（給馬達時間建立扭力），但不得超過 159 mm。</div>
+
+    <div class="danger"><b>⚠ 逾時保命鎖（路徑 4）刻意不設車速閘門，這是設計決定，不是缺陷。</b><br>
+      若速度命令已歸零滿 1000 ms、車卻仍在移動，代表<b>所有正常的減速與保持路徑都已失效</b>。
+      此時「車還在繼續移動」本身才是安全疑慮，必須無條件讓車停下來；由此產生的頓挫與煞車片磨耗是可接受的代價。<br>
+      <b>不得為了改善乘坐舒適性而為它加上車速條件</b> —— 那會讓最後一道防線在最需要它的時候放行。
+      舒適性應該由更早介入的路徑解決，這正是本版新增下坡滑動偵測（路徑 3）的目的。</div>
+  </div>
+
+  <!-- ============ 主題二（新增） ============ -->
+  <div class="card">
+    <h2><span class="n">2</span><span class="tagnew">V0.20 新增</span>下坡「點放油門」的滑動偵測</h2>
+
+    <h3>2-1. 現象</h3>
+    <div class="note"><b>在坡道上停著，點一下油門後立刻放掉，車會往下滑一段。</b>
+      正常的油門操作（正常加速、正常放油門減速）在坡道上不會發生此現象 —— 只有「點放」會。</div>
+
+    <h3>2-2. 為什麼原本三條路徑都接不住</h3>
+    <table>
+      <tr><th style="width:180px">原有機制</th><th>為什麼在這個情境失效</th></tr>
+      <tr><td><b>馬達三相短路</b></td>
+        <td>短路產生的制動力<b>與轉速成正比</b>。車剛開始滑、轉速接近 0 時，短路幾乎沒有制動力，撐不住坡度</td></tr>
+      <tr><td><b>馬達電氣煞車<br>（速度控制）</b></td>
+        <td>速度命令為 0 時，<b>車速誤差越小、馬達出力越小</b>。滑得越慢，電氣煞車越無力，來不及在短距離內止住</td></tr>
+      <tr><td><b>上坡倒溜偵測</b></td>
+        <td>它偵測的是「往<b>反</b>方向滾」。下坡是往<b>同</b>方向滑，<b>結構上偵測不到</b> —— 不是門檻設定的問題</td></tr>
+    </table>
+    <p class="legend">三條都不通時，只剩 1000 ms 的逾時保命鎖，而那時車速已經累積起來，夾下去就會有明顯頓挫。</p>
+
+    <h3>2-3. 新增的處理方式</h3>
+    <div class="ok"><b>命令已歸零、車卻仍在移動達 42 mm（24 個霍爾邊緣）→ EMB 立即夾住。</b><br>
+      此時車才剛開始滑、動能極小，<b>夾下去的不適感最低</b>。這也是為什麼要在早期攔下，而不是放寬最後的保命鎖。</div>
+    <table>
+      <tr><th style="width:235px">參數</th><th style="width:100px">目前值</th><th style="width:110px">調整方向</th><th>說明</th></tr>
+      <tr class="hi"><td><span class="k">主</span><b>上鎖前允許的滑動距離</b><br><span class="legend">EMB_DOWNHILL_SLIDE_EDGES</span></td>
+        <td class="val">24<br>（42 mm）</td><td class="val">仍滑太遠<br>→ 16 → 8</td>
+        <td>1 個邊緣 ＝ 1.75 mm。8＝14 mm、16＝28 mm、24＝42 mm。<br>
+            <b>設太小的風險：平路低速短程操作（起步只走幾十公分就放油門）可能被誤夾。</b>
+            若客戶回報「平路點一下油門後煞車會咬住」，就是設得太小，往上加</td></tr>
+      <tr><td><b>視為「已正常行駛」的車速</b><br><span class="legend">EMB_DOWNHILL_DISARM_PULSES</span></td>
+        <td class="val">8<br>（0.5 km/h）</td><td class="c">通常不動</td>
+        <td>車速超過此值且油門仍有輸出時，本偵測自動關閉 —— 這是<b>確保正常行駛與正常停車完全不受影響</b>的機制</td></tr>
+      <tr><td><b>偵測有效時限</b><br><span class="legend">EMB_DOWNHILL_ARM_WINDOW_MS</span></td>
+        <td class="val">0<br>（停用）</td><td class="val">如有誤夾<br>設 2000</td>
+        <td>備用的保險：放開煞車後最多只在此時間內偵測。若出現原因不明的平路誤夾，啟用它可把影響範圍限制在 2 秒內</td></tr>
+    </table>
+
+    <h3>2-4. 對正常使用的影響</h3>
+    <table>
+      <tr><th style="width:230px">使用情境</th><th style="width:100px">是否受影響</th><th>說明</th></tr>
+      <tr><td><b>平路行駛中放油門停車</b></td><td class="val" style="color:#7ee787">完全不受影響</td>
+        <td>車速早已超過 0.5 km/h 而使偵測關閉，停車行為與 V0.19 相同</td></tr>
+      <tr><td>平路停著點一下油門</td><td class="val" style="color:#7ee787">不受影響</td><td>平路不會自己滑動，偵測不會觸發</td></tr>
+      <tr><td>坡道停著點一下油門</td><td class="val">42 mm 後夾住</td><td>本次要解決的情境</td></tr>
+      <tr><td>上坡起步倒溜</td><td class="val">不變</td><td>仍由原本的倒溜偵測（122 mm）處理</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ 主題三 ============ -->
+  <div class="card">
+    <h2><span class="n">3</span>加速曲線（7 段）</h2>
+
+    <div class="ok"><b>共 7 段曲線可選，目前設定為第 5 段。</b>
+      曲線編號越大加速越猛。可依車型或客戶偏好在出廠時選定。<br>
+      <b>V0.20 新增曲線 6、7</b>（更快）。<b>原本的曲線 1～5 編號與手感完全沒有改變</b>，
+      因此由 V0.18／V0.19 升上來的機台加速手感不變。</div>
+
+    <table>
+      <tr><th style="width:80px">曲線</th><th style="width:130px">加速力道</th>
+          <th style="width:150px">由起步加到滿速所需時間</th><th>適用場合</th></tr>
+      <tr><td class="id">曲線 1</td><td class="val">0.69 km/h/s</td><td class="val">10.7 秒</td><td>最柔和。載重大、需極度平穩，或使用者為長者／行動不便者</td></tr>
+      <tr><td class="id">曲線 2</td><td class="val">1.04 km/h/s</td><td class="val">7.3 秒</td><td>柔和</td></tr>
+      <tr class="hi"><td class="id">曲線 3</td><td class="val">1.38 km/h/s</td><td class="val">5.7 秒</td><td><b>中性</b>。與本機種舊版韌體的加速手感相同，換版本時想保持一致選這段</td></tr>
+      <tr><td class="id">曲線 4</td><td class="val">2.07 km/h/s</td><td class="val">4.0 秒</td><td>偏快</td></tr>
+      <tr class="now"><td class="id">曲線 5</td><td class="val">2.76 km/h/s</td><td class="val">3.2 秒</td><td><b>← 目前值。</b>起步反應直接</td></tr>
+      <tr class="new"><td class="id">曲線 6</td><td class="val">3.45 km/h/s</td><td class="val">2.6 秒</td><td><span class="tagnew">新</span>更快。需確認載人穩定性</td></tr>
+      <tr class="new"><td class="id">曲線 7</td><td class="val">4.14 km/h/s</td><td class="val">2.1 秒</td><td><span class="tagnew">新</span>最快，約為曲線 3 的 3 倍。<b>務必先做載人測試</b></td></tr>
+    </table>
+    <p class="legend">參數名稱：<code>ACCEL_FILTER_CURVE_SELECT</code>（設定 1～7）。時間為由起步速度 1.04 km/h 加到設定最高速 8.29 km/h 的理論值。</p>
+
+    <div class="danger"><b>⚠ 曲線 6、7 上車前必測。</b>曲線 7 的加速度為 1.15 m/s²，約為曲線 3（舊版手感）的 3 倍。
+      醫療代步車的乘客在起步瞬間未必已抓穩，且較高的加速度會增加<b>後傾風險</b>。
+      開放給使用者選用前，務必實測起步衝擊與載人穩定性。</div>
+
+    <h3>3-1. 三項配套說明</h3>
+    <table>
+      <tr><th style="width:170px">項目</th><th>說明</th></tr>
+      <tr><td><b>轉折已做平滑處理</b></td>
+        <td>每段曲線都內含一階平滑（約 0.26 秒），起步、到達設定速度、以及切換段位時的<b>速度階躍都會被磨圓</b>，不會有突然一頓的感覺。此平滑不需客戶設定</td></tr>
+      <tr><td><b>起步速度直接預載</b></td>
+        <td>起步瞬間即以 <b>1.04 km/h</b> 起算，不需從 0 慢慢爬升，因此低速起步不會有遲滯感</td></tr>
+      <tr class="hi"><td><b>只影響加速，不影響煞停</b></td>
+        <td><b>本曲線僅作用於加速方向。</b>放油門的減速行為完全不受影響，走獨立的減速設定（見 1-3 順位 3）
+            —— 也就是說<b>調整加速曲線不會改變煞停距離或安全性</b></td></tr>
+    </table>
+
+    <h3>3-2. 常見誤解</h3>
+    <div class="note"><b>「選最快的曲線，頂速卻只有 7.2 km/h」</b>—— 這與加速曲線無關。
+      設定最高速為 8.29 km/h，但實機頂速受<b>電池母線電壓</b>限制：電壓約 25 V 時頂速約 7.1 km/h，需達 28 V 以上才能跑到設定值。
+      韌體內<b>沒有</b>額外的限速器。若要提高頂速，方向是電池／供電規格，不是加速曲線或段位上限。</div>
+  </div>
+
+  <!-- ============ 附註 ============ -->
+  <div class="card">
+    <h2><span class="n">4</span>共通注意事項</h2>
+    <table>
+      <tr><th style="width:40px">#</th><th>事項</th></tr>
+      <tr><td class="id">1</td><td>本文所有參數均為<b>韌體編譯時內建</b>，無法由 LCD、App 或現場工具即時修改。變更需重新編譯並燒錄韌體</td></tr>
+      <tr><td class="id">2</td><td>加速曲線亦可改為<b>由通訊協定即時選擇</b>。目前<b>預設關閉且建議維持關閉</b>：協定送出的段位語意尚未經實機驗證，
+        且異常值會被夾到<b>最快</b>的曲線（V0.20 之後最快段更猛），啟用前需先確認儀表送出的定義</td></tr>
+      <tr class="hi"><td class="id">3</td><td>調整倒溜或下坡滑動的門檻後，<b>務必重做坡道測試</b>（上坡起步、上坡倒溜、下坡點放）。
+        僅調 1-3 順位 1（夾煞等待時間）則無此需求</td></tr>
+      <tr><td class="id">4</td><td>建議調整順序：<b>先改一項、實車確認、再改下一項</b>。同時改動多項會無法判斷是哪一項造成手感變化</td></tr>
+      <tr><td class="id">5</td><td>韌體版本可由儀表讀取確認（V0.20 回報 <code>0x0020</code>），燒錄後請先確認版本再開始測試</td></tr>
+    </table>
+
+    <h3>4-1. 本版建議的實車測試順序</h3>
+    <table>
+      <tr><th style="width:40px">#</th><th style="width:230px">測試</th><th>確認重點</th></tr>
+      <tr class="hi"><td class="id">1</td><td><b>平路行駛中放油門停車</b></td>
+        <td><b>最重要。</b>停車行為應與 V0.19 完全相同，不應出現帶速夾煞。若停車過程中煞車提早咬住，
+            回報後需調整下坡滑動偵測的門檻</td></tr>
+      <tr><td class="id">2</td><td>坡道停著點放油門</td><td>應在約 42 mm（約 4 公分）內夾住，不應持續下滑</td></tr>
+      <tr><td class="id">3</td><td>頂牆／堵轉後放開油門</td><td>不應出現馬達反向驅動。另可觀察：頂牆超過 8 秒後推力是否明顯變小（電流保護），60 秒後是否停止出力</td></tr>
+      <tr><td class="id">4</td><td>上坡起步與上坡倒溜</td><td>起步不應被誤夾；倒溜量不應超過 1/4 車輪（159 mm）</td></tr>
+      <tr><td class="id">5</td><td>低速切換前後檔</td><td>不應被誤夾</td></tr>
+      <tr><td class="id">6</td><td>平路起步、加速、全速煞停</td><td>手感應與 V0.19 相同（加速曲線仍為 5）；煞停距離符合預期</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">LWFDSPC 主控器　韌體 V0.20　|　停車煞車時機與加速曲線 調整說明　|　2026-08-13　|　取代 V0.18 版</p>
+</div>
+</body>
+</html>
