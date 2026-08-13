@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Work Log 2026-08-03 to 08-09</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",sans-serif; background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1100px; margin:0 auto; padding:28px 18px 60px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:15px 19px 18px; margin:0 0 16px; }
+  h2 { font-size:1.1rem; margin:0 0 9px; }
+  h2 .n { display:inline-block; width:25px; height:25px; line-height:25px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.86rem;
+          margin-right:8px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,monospace; font-size:.84em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:7px 0; font-size:.83rem; }
+  th,td { border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.81rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.79rem; color:#ffd580; }
+  td.old { text-align:center; font-family:Consolas,monospace; color:#ff9d96; white-space:nowrap; }
+  td.new { text-align:center; font-family:Consolas,monospace; color:#7ee787; font-weight:700; white-space:nowrap; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  tr.bad td { background:rgba(248,81,73,.06); }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:9px 0; font-size:.85rem; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:8px 12px; border-radius:6px; margin:9px 0; font-size:.85rem; }
+  .foot { color:var(--muted); font-size:.78rem; text-align:center; margin-top:26px; }
+  @media print {
+    @page { size:A4; margin:12mm 10mm; }
+    :root { --bg:#fff; --card:#fff; --fg:#111; --muted:#555; --accent:#0b5cad;
+            --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:9.5pt; line-height:1.42; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:15pt; } h2 { font-size:11.5pt; }
+    .card { border:1px solid #b9c2cc; margin:0 0 8px; padding:9px 12px 11px;
+            break-inside:avoid; page-break-inside:avoid; }
+    h2 .n { background:#0b5cad; color:#fff; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; }
+    table { font-size:7.8pt; } th,td { padding:3px 5px; }
+    th { background:#e6eef8 !important; }
+    tr,td,th { break-inside:avoid; page-break-inside:avoid; }
+    td.old { color:#a5006e; } td.new { color:#0a6b22; } td.f { color:#8a3a00; }
+    tr.hi td { background:#fffbe8 !important; }
+    tr.bad td { background:#ffeceb !important; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; }
+    .note { background:#fff8e6; border-left-color:#d6a400; }
+    .sub,.foot { color:#555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Work Log — 2026-08-03 to 08-09</h1>
+  <p class="sub">LWFDSPC main controller &nbsp;|&nbsp; 10 commits, 35 files, +2092 / &minus;169 &nbsp;|&nbsp; two internal releases tagged</p>
+
+  <div class="card">
+    <div class="ok"><b>Theme of the week:</b> raising the speed-loop gains to fix uphill starting exposed
+      several latent problems downstream &mdash; harsh deceleration, a creeping assist level 0, and a
+      rollback counter that could never trigger. V0.18 and V0.19 address them.</div>
+    <table>
+      <tr><th style="width:90px">Release</th><th style="width:90px">Date</th><th style="width:130px">Modbus ID03 0x15</th><th>Contents</th></tr>
+      <tr><td class="c"><b>v0.18</b></td><td class="c">08-06</td><td class="c"><code>0x0018</code></td>
+        <td>EMB rollback net-edge counting, alarm code fix, LW_Jeff merge</td></tr>
+      <tr><td class="c"><b>v0.19</b></td><td class="c">08-07</td><td class="c"><code>0x0019</code></td>
+        <td>e-lock, deceleration command filter, standstill speed fix</td></tr>
+    </table>
+  </div>
+
+  <!-- 1 -->
+  <div class="card">
+    <h2><span class="n">1</span>Bugs fixed</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:200px">Problem</th><th>Cause and fix</th></tr>
+      <tr class="hi"><td class="c">1</td><td><b>Assist level 0 still crept forward at 1.04 km/h; reverse was not blocked at all</b></td>
+        <td>The level cap table's entry 0 is 0, but three <code>OUTPUT_MIN</code> floors downstream promoted it
+          back to 1500 counts. Present in V0.16 too, masked by the EMB release threshold of 1600
+          (1500 &lt; 1600, so the brake never released &mdash; the motor was instead stalling against a clamped
+          brake). Lowering that threshold to 800 made the creep visible.<br>
+          Fixed by returning target 0 at level 0 before any floor applies, direction-agnostic so forward and
+          reverse are blocked together, plus an EMB gate that prevents any command source from releasing the
+          brake at level 0. Deliberately not an immediate hard lock, so dropping to level 0 while moving
+          decelerates smoothly first. Now called <b>e-lock</b>.</td></tr>
+      <tr class="hi"><td class="c">2</td><td><b>Powered-rollback detection could never trigger uphill</b></td>
+        <td>The counter required <i>consecutive</i> reverse hall edges and reset to 0 on any same-direction
+          edge. During a PI-versus-gravity tug of war the counter was zeroed every cycle while net
+          displacement kept growing past the 1/4-wheel spec. Changed to <b>net</b> counting
+          (reverse +1, forward &minus;1, floor 0).</td></tr>
+      <tr><td class="c">3</td><td>Rollback counter froze at standstill, causing a re-lock deadlock</td>
+        <td>The counter is only updated inside the hall-edge ISR, so with the vehicle clamped and still,
+          nothing ran &mdash; not even the disarm path. It stayed at or above threshold, so re-applying the
+          throttle re-locked on the next 20 ms tick before the wheel moved, and clearing the count requires
+          motion. Now cleared on EMB LOCK and RELEASE.</td></tr>
+      <tr><td class="c">4</td><td>Assist level index read past the array</td>
+        <td>Modbus delivers 4 bits (0&ndash;15) but the cap table has 6 entries and the index was never
+          bounds-checked. Now clamped; levels 6&ndash;15 behave as level 5.</td></tr>
+      <tr class="hi"><td class="c">5</td><td><b>Standstill speed zeroing had never worked</b></td>
+        <td><code>MotorStartSpeedPulses</code> was initialised to 0 and never assigned, so the guard was
+          always false. X2CScope showed the effect: after a stop, a final hall edge decoded as reverse
+          (brake-clamp rebound) held the measured speed at &minus;900 counts for 840 ms until the timer-1
+          timeout. The command was already 0, so the speed loop saw a positive error and drove the motor
+          forward &mdash; harmless only because UVW short and EMB usually clamped first. Set to 3
+          (0.19 km/h); the residue now clears within one 100 ms latch period.</td></tr>
+      <tr><td class="c">6</td><td>A04 / A19 alarm codes swapped</td>
+        <td>EMB sensor fault was on A19 and motor hall fault on A04, the reverse of spec. Swapped, and the
+          EMB fault bit added to the Modbus LCD error register.</td></tr>
+    </table>
+  </div>
+
+  <!-- 2 -->
+  <div class="card">
+    <h2><span class="n">2</span>New: deceleration command filter</h2>
+    <p style="margin:4px 0 8px;font-size:.86rem;">The higher speed-loop gains faithfully amplified the command
+      steps on throttle release and on level changes, which the rider felt as a jolt. The acceleration side
+      already had rate-limit plus a first-order filter; the deceleration side went through the old step/time
+      table. It now has its own filter, with <b>four independent quadrants</b>: forward/reverse &times;
+      accel/decel.</p>
+    <table>
+      <tr><th style="width:230px">Item</th><th>Detail</th></tr>
+      <tr><td>7 selectable decel curves</td>
+        <td>R from 20 to 100 counts/tick, i.e. 1200 ms down to 240 ms for full travel. Curves 4 and 6 match
+          the old table's &minus;25 and &minus;40. Its selector is independent of the accel curve, since
+          deceleration is safety-relevant and should not follow the rider's chosen accel level.
+          Currently set to curve 2 (800 ms).</td></tr>
+      <tr class="hi"><td>Rate limiter needed a down branch</td>
+        <td>It previously snapped straight to target whenever the target dropped, so a decel rate parameter
+          would have had no effect whatsoever. This was the single most important implementation detail.</td></tr>
+      <tr><td>Min-RPM floor gated to accel only</td>
+        <td>On the decel path it would pin the command at 1500 counts, so the vehicle could never stop and
+          UVW/EMB could never engage &mdash; the stop chain needs the command to be exactly 0.</td></tr>
+      <tr><td>Snap-to-zero threshold</td>
+        <td>The filter tail is asymptotic: about 240 ms at K=4 before the output rounds to 0, and at K&nbsp;&ge;&nbsp;10
+          integer decay sticks at 1 count forever.</td></tr>
+      <tr class="hi"><td>Reverse got its own parameters</td>
+        <td>Found that reverse had been silently using the <i>forward</i> accel curve &mdash; the filter call had
+          no direction gate. Reverse 0&rarr;2.76 km/h was taking about 0.63 s against the 5&ndash;8 s its own
+          step/time table intended, roughly 8&times; faster, with a preload jumping straight to 38% of reverse
+          full speed. Defaults deliberately reproduce that existing behaviour, so reverse feel is unchanged
+          this release and is now tunable.</td></tr>
+    </table>
+    <div class="note">The step/time tables and their ramp function are untouched and remain the fallback when
+      the filter is disabled. Note they are still computed every cycle but no longer used on the live path, so
+      tuning them now has no effect.</div>
+  </div>
+
+  <!-- 3 -->
+  <div class="card">
+    <h2><span class="n">3</span>Tuning changes</h2>
+    <table>
+      <tr><th style="width:250px">Parameter</th><th style="width:80px">V0.16</th><th style="width:80px">V0.19</th><th>Reason</th></tr>
+      <tr><td class="f">SPEEDCNTR_PTERM / ITERM</td><td class="old">3000 / 10</td><td class="new">5000 / 20</td>
+        <td>Uphill starting (from the LW_Jeff merge). Effective Kp +67%, Ki +100%</td></tr>
+      <tr class="hi"><td class="f">UVW_LOCK_STOP_PULSES</td><td class="old">3</td><td class="new">3</td>
+        <td>Went to 15 in V0.18, back to 3 in V0.19. At 15 the "stopped" threshold was 0.94 km/h, so EMB
+          entered the clamp sequence while still rolling &mdash; the reported jolt and pad noise</td></tr>
+      <tr><td class="f">EMBRAKER_RELEASE_THRESHOLD_FWD / REV</td><td class="old">1600</td><td class="new">800</td>
+        <td>Lets the brake release at lower commands; also what exposed bug #1</td></tr>
+      <tr class="bad"><td class="f">EMB_ROLLBACK_REV_EDGES</td><td class="old">3</td><td class="new">90</td>
+        <td>5.2 mm &rarr; 157 mm against the 159 mm quarter-wheel spec limit. With UVW back at 3 this is now the
+          <b>sole uphill rollback defence</b></td></tr>
+      <tr><td class="f">EMB_ROLLBACK_CMD_THRESHOLD</td><td class="old">500</td><td class="new">100</td>
+        <td>Arming threshold for rollback detection, 0.35 &rarr; 0.069 km/h</td></tr>
+      <tr><td class="f">LOGIC_TEMP_CONTROLLER_RATIO_NORMAL</td><td class="old">0.33</td><td class="new">0.35</td>
+        <td>Slightly wider normal current ceiling (levels 1&ndash;5 also raised ~0.02)</td></tr>
+      <tr><td class="f">ACCEL_FILTER_CURVE_SELECT</td><td class="old">4</td><td class="new">5</td>
+        <td>Fastest accel curve, 2.76 km/h/s, 3.2 s to top speed</td></tr>
+    </table>
+  </div>
+
+  <!-- 4 -->
+  <div class="card">
+    <h2><span class="n">4</span>Documentation</h2>
+    <table>
+      <tr><th style="width:300px">Document</th><th>Purpose</th></tr>
+      <tr><td class="f">版本及變動說明/</td><td>New folder; all 12 existing guides and change logs collected into it</td></tr>
+      <tr><td class="f">V0.16_to_V0.19_version_variation</td><td>Full parameter-by-parameter comparison, bug list, test checklist, known open items</td></tr>
+      <tr><td class="f">V0.18_customer_EMB_stop_and_accel_curve</td><td>Customer-facing: the four parameters for "EMB clamps too early" ranked by effect, and the 5 accel curves. No source paths</td></tr>
+      <tr><td class="f">V0.18_change_summary</td><td>Internal change tables for V0.18</td></tr>
+      <tr><td class="f">quick_tuning_sheet_V0.19</td><td>Re-versioned from V0.16</td></tr>
+    </table>
+  </div>
+
+  <!-- 5 -->
+  <div class="card">
+    <h2><span class="n">5</span>Verification status</h2>
+    <table>
+      <tr><th style="width:230px">Check</th><th style="width:90px">Result</th><th>Method</th></tr>
+      <tr><td>Full project build</td><td class="c" style="color:#7ee787"><b>clean</b></td>
+        <td>XC16 v2.10, project settings, zero diagnostics; .elf and .hex produced</td></tr>
+      <tr><td>Decel rate takes effect</td><td class="c" style="color:#7ee787"><b>confirmed</b></td>
+        <td>X2CScope: rate-limited ramp measured 390 ms against 375 ms predicted for that curve</td></tr>
+      <tr><td>Command reaches exactly 0</td><td class="c" style="color:#7ee787"><b>confirmed</b></td>
+        <td>X2CScope: <code>g_i16ScopeCmdOut</code> touches 0, snap step visible</td></tr>
+      <tr class="bad"><td><b>On-vehicle testing of V0.19</b></td><td class="c" style="color:#e6c069"><b>not done</b></td>
+        <td>Braking distance, slope rollback, e-lock, level-0-while-moving all still pending</td></tr>
+    </table>
+  </div>
+
+  <!-- 6 -->
+  <div class="card">
+    <h2><span class="n">6</span>Open items</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:230px">Item</th><th>Notes</th></tr>
+      <tr class="bad"><td class="c">1</td><td><b>V0.19 not road-tested</b></td>
+        <td>Highest priority: braking distance versus V0.18 (curve 2 is theoretically about 2.1&times; the old
+          distance), slope rollback now that <code>EMB_ROLLBACK_REV_EDGES</code>=90 is the only defence, and
+          e-lock in both directions plus recovery back to level 3</td></tr>
+      <tr><td class="c">2</td><td><b>EMB failsafe has no speed gate</b><br>
+          <span style="color:#7ee787">&#10003; closed 08-13 &mdash; intentional, not a defect</span></td>
+        <td><i>As observed this week:</i> on a downhill the UVW path cannot engage (wheel speed too high),
+          Plan B depends on UVW, and rollback detection is disarmed once the command decays &mdash; so only
+          the 3000 ms failsafe remains, and it clamps regardless of speed. Shortening it to 1000 ms was
+          discussed but not applied at the time.
+          <br><br><b>Follow-up 08-13:</b> the absence of a speed gate is <b>deliberate design</b>. If the
+          command has been zero for the whole timeout and the vehicle is <i>still moving</i>, every normal
+          deceleration and holding path has already failed &mdash; at that point continued motion is itself
+          the hazard, so the vehicle must be stopped regardless of speed. The jolt and pad wear are an
+          accepted cost. <b>A speed gate must not be added for ride comfort</b>, as it would disable the last
+          line of defence exactly when it is needed.
+          <br>Comfort is instead addressed by letting an <i>earlier</i> path catch the case: the new
+          downhill-slide detector (<code>EMB_DOWNHILL_*</code>, v0.20) clamps after 42 mm of travel, while
+          kinetic energy is still negligible. <code>EMBRAKER_LOCK_TIMEOUT_MS</code> was separately shortened
+          3000 &rarr; 1000 ms on 08-10. See <code>s_logic_embraker.h</code> for the recorded intent</td></tr>
+      <tr><td class="c">3</td><td>600-count steady-state gap at full speed</td>
+        <td>Command 12000 but measured speed plateaus at 11400 (7.87 versus 8.29 km/h). A PI with integral
+          action should drive steady-state error to zero, so this is output saturation. Source not yet
+          confirmed &mdash; bus voltage (25 V is known to give only about 7.1 km/h) or the temperature current
+          clamp. Scope <code>piOutputOmega.out</code> against <code>outMax</code> to tell them apart</td></tr>
+      <tr><td class="c">4</td><td>step/time tables are now dead on the live path</td>
+        <td>Still computed each cycle but unused. Tuning them has no effect &mdash; a trap for the next person</td></tr>
+      <tr><td class="c">5</td><td>Dead parameters found</td>
+        <td><code>LOGIC_THROTTLE_FAULT_DECEL_STEP_TIME</code> is never applied (the caller has no else branch);
+          <code>UVW_LOCK_SPEED_THRESHOLD</code> and <code>UVW_LOCK_CURRENT_THRESHOLD</code> have zero
+          references</td></tr>
+      <tr><td class="c">6</td><td>Temperature current limit clamps a voltage</td>
+        <td>The variable is named as a current limit but is used to bound the <code>qVqRef</code> voltage
+          reference. Possibly related to item 3</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">LWFDSPC work log &middot; 2026-08-03 to 08-09 &middot; releases v0.18, v0.19 &middot; all commits pushed to origin/main</p>
+</div>
+</body>
+</html>
