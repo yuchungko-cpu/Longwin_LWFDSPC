@@ -41,6 +41,7 @@ typedef enum {
 //  (2) [Plan B] 偵測到倒溜(反向霍爾邊緣) → 立即鎖定。
 //  (3) [failsafe] 速度命令(ReferenceRAW)歸零後超過 EMBRAKER_LOCK_TIMEOUT_MS 仍未由 UVW lock
 //      鎖定(例如霍爾異常導致 UVW lock 從未生效) → 強制鎖定,確保 EMB 不會永遠不鎖。
+//      **不看車速**,時間到就夾 —— 刻意如此,理由見該巨集處的 ⚠⚠。
 //      計時從「命令歸零」起算(非鬆油門瞬間)，避免 timeout 在減速斜坡期間被吃光而帶速硬鎖。
 //  (4) [有動力倒溜] RELEASED 與 WAITING_TO_LOCK 兩個狀態下,偵測到「命令一個方向、車卻往
 //      反方向動」→ **立即**鎖定並閂鎖至鬆油門。涵蓋陡坡上有動力卻被重力拉著反向、尚未近停
@@ -55,8 +56,34 @@ typedef enum {
 //      用的是未平滑的原始油門命令(放油門瞬間歸零),而反向邊緣計數器的武裝訊號是平滑後的
 //      inReference(走減速斜坡,衰減較慢)——兩者步調不一致時,計數達標可能發生在狀態已經
 //      切到 WAITING_TO_LOCK 之後,若只在 RELEASED 檢查會漏接,一路掉到 (3) 的 timeout 才鎖。
+//  (5) [下坡滑動] 與 (4) 是**不同的物理現象**,不可混為一談:
+//        (4) 倒溜   = 車往與命令**相反**的方向動 → 方向問題 → 規格管位移(≤1/4 車輪)
+//        (5) 下坡滑動 = 車往與命令**相同**的方向動但比命令快 → 速度問題 → 無位移規格
+//      (4) 的偵測是「反向 +1、正向 -1、**地板 0**」的淨計數,下坡往前滑每個邊緣都是 -1 被
+//      夾在 0 → **結構上永遠偵測不到下坡滑動**,不是門檻調不調的問題。
+//      情境:停在坡上「點油門後立刻放掉」→ EMB 釋放、車被重力拉動、命令立刻歸零。此時
+//      UVW 短路扭矩 ∝ 轉速(ω≈0 幾乎無扭矩)、速度環 PI 在零誤差時輸出零扭矩且積分爬升慢、
+//      (4) 又結構上不涵蓋 → 三條路全不通,只剩 (3) 的 failsafe 帶速硬夾。
+//      本判斷在「車剛開始滑動」時即鎖定,動能極小,不適感最低。
+//      偵測訊號由 main.c 產生後以 bDownhillSlideDetected 傳入,RELEASED 與 WAITING_TO_LOCK
+//      兩個狀態都檢查(理由同 (4))。武裝條件與門檻見 userparms.h 的 EMB_DOWNHILL_*。
 #define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 50  // UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定
-#define EMBRAKER_LOCK_TIMEOUT_MS 3000         // 命令歸零後逾時強制鎖定的故障安全網 (ms)
+// 命令歸零後逾時強制鎖定的故障安全網 (ms)。[實車調校 2026-08-10] 3000 → 1000。
+//   縮短的理由：下坡滑行時三條正常路徑全部不可達 —— UVW lock 進不去(HallPulsesLatch 遠大於
+//   UVW_LOCK_STOP_PULSES)、Plan B 必須先有 UVW、有動力倒溜偵測又因命令降到
+//   EMB_ROLLBACK_CMD_THRESHOLD 以下而解除武裝 —— 只剩本 failsafe。下坡車速持續上升,
+//   3000ms 時的車速遠高於 1000ms,縮短計時等於在較低車速時才夾,衝擊較小。
+//   原本設 3000ms 是擔心「命令已歸零但車還在滾」時被帶速硬夾,但實車驗證 1000ms 下
+//   UVW lock 都能及時接手(配合 UVW_LOCK_STOP_PULSES),平地停車無頓挫。
+//
+//   ⚠⚠ 本計時**刻意不設車速閘門** —— 時間到就夾,不管當時車速。這是設計決定,不是缺陷:
+//     命令已歸零卻仍持續移動達 EMBRAKER_LOCK_TIMEOUT_MS,代表所有正常的減速與保持路徑
+//     都已失效。此時「車還在繼續移動」本身才是安全疑慮,必須強制停止;帶速夾造成的頓挫
+//     與煞車片磨耗是可接受的代價。
+//     ⇒ **不要為了舒適性而加車速閘門。** 那會讓最後一道保底在最需要它的時候放行。
+//     舒適性要從「讓更早的路徑先接手」解決 —— 那是上面 (5) 下坡滑動偵測的職責
+//     (EMB_DOWNHILL_*,42mm 就攔下,此時動能極小)。本計時只負責「無論如何都要停下來」。
+#define EMBRAKER_LOCK_TIMEOUT_MS 1000
 
 // --- 以下參數目前未作為 EMB 動作條件 (保留定義供參考) ---
 #define EMBRAKER_LOCK_SPEED_KMH_X10 5   // (停用) 舊版低於此車速(km/h×10)則鎖定
@@ -80,6 +107,12 @@ bool logic_embraker_init(uint16_t u16IembMv);
  * @param bReverseEdgeDetected [Plan B] 是否偵測到倒溜(與行駛方向相反的霍爾邊緣)
  * @param bRollbackDetected [有動力倒溜] 連續反向霍爾邊緣達 EMB_ROLLBACK_REV_EDGES(main.c 算好傳入)
  *                          → 立即鎖定並閂鎖至鬆油門。RELEASED、WAITING_TO_LOCK 兩個狀態都會檢查。
+ * @param bDownhillSlideDetected [下坡滑動] 命令歸零後仍持續移動達 EMB_DOWNHILL_SLIDE_EDGES
+ *                          (main.c 算好傳入，含武裝條件) → **立即鎖定**，不經 UVW 延遲也不等
+ *                          timeout failsafe。與 bRollbackDetected **刻意不同**：不設閂鎖。
+ *                          倒溜閂鎖是為了擋「坡上仍握著油門 → LOCKED 的運轉前檢查又放開 →
+ *                          再次倒溜」的循環；下坡滑動的觸發前提是駕駛已經放掉油門，
+ *                          bIsActive 本就是 false，LOCKED 會自然保持，該循環不存在。
  * @param bBrakeSwOn        [IBKS] 手剎車/充電中訊號作用中 (RC12 為 Low → uGF.BrakeSWOn==1)。
  *                          為 true 時**立即鎖定**，不經 UVW 延遲也不等 timeout failsafe。
  * @param bELockActive      [e-lock] 助力段位 0 (電子鎖車) 作用中。
@@ -97,6 +130,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
                                         bool bRollbackDetected,
+                                        bool bDownhillSlideDetected,
                                         bool bBrakeSwOn,
                                         bool bELockActive,
                                         uint32_t u32CurrentTimeMs);

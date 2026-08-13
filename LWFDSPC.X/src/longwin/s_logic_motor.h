@@ -108,7 +108,9 @@ typedef struct
     uint16_t u16StartCmd;         // 起始速度 (命令 count)；加速起步時直接預載，不用爬上去
 } S_ACCEL_FILTER_CURVE_T;
 
-#define ACCEL_FILTER_CURVE_COUNT 5u
+// 7 段。這個值同時是曲線表的陣列維度與 logic_motor_getUpdateParamsFiltered() 的索引
+//   夾住上界(s_logic_motor.c)，改它不會動到任何一段曲線的內容。
+#define ACCEL_FILTER_CURVE_COUNT 7u
 
 // --- 曲線選擇 ---
 // 原本的 step/time 曲線是「純程式內設定」：門檻與 {Step,Time} 全是 #define，
@@ -117,33 +119,54 @@ typedef struct
 // 註：協定裡的 eAccelCurve (ID02/ID03 reg 0x09)、u8AccelMs_Ax1~Ax5 (reg 0x0F~0x11) 與
 //   EEPROM 的 u8AccelCurveGroup 目前都只被解碼/回寫，沒有任何控制邏輯讀取，
 //   且其語意未經實機驗證(LCD 送 0 就會落到最緩的曲線 1)，故預設不使用。
-#define ACCEL_FILTER_CURVE_SELECT (5u)  // 1~5；曲線 3 = 與原本 step/time 同手感
+#define ACCEL_FILTER_CURVE_SELECT (5u)  // 1~7；曲線 3 = 與原本 step/time 同手感
 
 // 1 = 改由 Modbus 的 eAccelCurve 選 (A0 = 第 1 組)；0 = 用上面的 ACCEL_FILTER_CURVE_SELECT
+//   ⚠ 啟用前要注意：eAccelCurve 取自 (u16ControlMode & 0xFF)，是未經驗證的 8-bit 值，
+//     直接當索引傳入 logic_motor_getUpdateParamsFiltered()。該函式對越界的處理是
+//     **夾到最後一段(最快)**,不是夾到最緩:
+//         if (u8CurveIndex >= ACCEL_FILTER_CURVE_COUNT) u8CurveIndex = COUNT - 1u;
+//     追加曲線 6、7 之後,「最後一段」已由 R=8 變成 R=12(加速率 1.5 倍),
+//     所以任何異常值會落到更猛的曲線上。啟用此開關前應改成夾到最緩或加白名單。
 #define ACCEL_FILTER_CURVE_FROM_MODBUS (0)
 
 #define ACCEL_FILTER_CURVE_INDEX_DEFAULT ((uint8_t)((ACCEL_FILTER_CURVE_SELECT) - 1u))
 
 #if ((ACCEL_FILTER_CURVE_SELECT) < 1u) || ((ACCEL_FILTER_CURVE_SELECT) > ACCEL_FILTER_CURVE_COUNT)
-#error "ACCEL_FILTER_CURVE_SELECT 必須是 1~5"
+#error "ACCEL_FILTER_CURVE_SELECT 必須是 1~7"
 #endif
 
 // 起始速度預設值 = 原本的 OUTPUT_MIN (549.3 RPM = 1.04 km/h)
 #define ACCEL_FILTER_START_CMD_DEFAULT RPMX10_TO_CMD(5493)
 
-// 曲線索引 0~4 對應曲線 1~5 (eAccelCurve A0 = 第 1 組)。
+// 曲線索引 0~6 對應曲線 1~7 (eAccelCurve A0 = 第 1 組)。
 // R (counts/tick, tick=2ms) → 加速率 / 由起始速度到 8.29 km/h 的到達時間：
-//   曲線1  R=2  0.69 km/h/s  10.7s      曲線4  R=6  2.07 km/h/s  4.0s
-//   曲線2  R=3  1.04 km/h/s   7.3s      曲線5  R=8  2.76 km/h/s  3.2s
-//   曲線3  R=4  1.38 km/h/s   5.7s  ← 與原本 step/time 的 ENTRY_0 {2,1} 同手感
-// K 全部用 7 (τ=0.26s)：折角磨圓但不明顯延遲；要更軟可個別加大。
-#define ACCEL_FILTER_CURVE_TABLE_INIT                                          \
-    {                                                                          \
-        {2, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 1 最緩 */               \
-        {3, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 2 */                    \
-        {4, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 3 = 原本手感 */         \
-        {6, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 4 */                    \
-        {8, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 5 最快 */               \
+//   曲線1  R=2   0.69 km/h/s  10.7s      曲線5  R=8   2.76 km/h/s  3.2s
+//   曲線2  R=3   1.04 km/h/s   7.3s      曲線6  R=10  3.45 km/h/s  2.6s  ← 追加
+//   曲線3  R=4   1.38 km/h/s   5.7s      曲線7  R=12  4.14 km/h/s  2.1s  ← 追加
+//   曲線4  R=6   2.07 km/h/s   4.0s
+//   (曲線3 = 與原本 step/time 的 ENTRY_0 {2,1} 同手感)
+//
+// [2026-08-11] 追加曲線 6、7。**接在後面而非插在前面** —— 減速側當初追加兩段更柔的是插在
+//   最前面(原 1~5 順移為 3~7)，加速側若照做，現行的 ACCEL_FILTER_CURVE_SELECT = 5 會從
+//   R=8 變成 R=4，加速率悄悄砍半。接在後面則原本的曲線 1~5 編號與內容**完全不動**。
+//
+// K 全部維持 7 (τ=0.26s)：折角磨圓但不明顯延遲；要更軟可個別加大。
+//   追加的兩段不必降 K —— τ／全程比為 9.8% (R=10) 與 12.2% (R=12)，仍在減速表所採用的
+//   7~13% 區間內(見上方減速曲線說明)，濾波不會吃掉太多到達時間。
+//
+// ⚠ 安全：曲線 7 的加速率是 4.14 km/h/s = 1.15 m/s²，約為曲線 3(原本手感)的 3 倍。
+//   醫療代步車起步時乘客未必抓穩，且高加速度會增加後傾風險 —— 曲線 6、7 上車前務必
+//   實測起步衝擊與載人穩定性，確認可接受後再開放給使用者選。
+#define ACCEL_FILTER_CURVE_TABLE_INIT                                           \
+    {                                                                           \
+        {2, 7, ACCEL_FILTER_START_CMD_DEFAULT},  /* 曲線 1 最緩 */               \
+        {3, 7, ACCEL_FILTER_START_CMD_DEFAULT},  /* 曲線 2 */                    \
+        {4, 7, ACCEL_FILTER_START_CMD_DEFAULT},  /* 曲線 3 = 原本手感 */         \
+        {6, 7, ACCEL_FILTER_START_CMD_DEFAULT},  /* 曲線 4 */                    \
+        {8, 7, ACCEL_FILTER_START_CMD_DEFAULT},  /* 曲線 5 */                    \
+        {10, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 6 (追加) */             \
+        {12, 7, ACCEL_FILTER_START_CMD_DEFAULT}, /* 曲線 7 最快 (追加) */        \
     }
 
 // ============================================================================
@@ -234,7 +257,9 @@ typedef struct
 
 // 反轉減速：原反轉減速表為 -10~-22 counts/ms,等效 20~44 counts/tick,取中段 32。
 //   4000 counts 全程 250 ms,τ=32 ms 佔 13%。
-#define REV_DECEL_FILTER_RATE 32u
+// [實車調校 2026-08-10] 32 → 23。反轉獨立減速參數實測效果良好,確定採用此模式。
+//   23 counts/tick = 11.5 counts/ms → 4000 counts 全程 348 ms (原 32 為 250 ms)。
+#define REV_DECEL_FILTER_RATE 23u
 #define REV_DECEL_FILTER_SHIFT 4u
 #define REV_DECEL_FILTER_SNAP DECEL_FILTER_SNAP_TO_ZERO_DEFAULT
 

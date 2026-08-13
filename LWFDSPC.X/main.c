@@ -243,6 +243,17 @@ unsigned int HallPulsesCntr = 0;
 // 1 邊緣 = 車輪 1.75 mm，門檻見 userparms.h 的 EMB_ROLLBACK_REV_EDGES。
 // ⚠ 只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE 動作處必須清零(見該處註解)。
 volatile uint8_t g_u8EmbRevEdgeCnt = 0;
+// [下坡滑動] 命令歸零後的「淨」位移邊緣數，**帶號**：一個轉向 +1、另一個 -1。
+// 與 g_u8EmbRevEdgeCnt 的差別 (兩者不可合併，見 userparms.h 的說明)：
+//   倒溜計數需要「命令方向」來定義什麼叫反向，故必須靠 |inReference| > 門檻 武裝;
+//   而本計數的閘門本來就是「命令已歸零」—— 那時沒有命令方向可比，所以改用帶號淨計數，
+//   由 20ms 的 EMB 任務以 |cnt| >= EMB_DOWNHILL_SLIDE_EDGES 判斷，不需鎖存方向。
+// 帶號淨計數的兩個附帶好處：
+//   (1) 靜止抖動時方向交替 → 正負相抵停在 0 附近 → 自動免疫誤觸 (與倒溜同一原理);
+//   (2) 前後對稱 → 順帶接住「命令已歸零後的無動力倒溜」，那正是倒溜偵測解除武裝後的空窗。
+// 命令非零時持續歸零 → 計數天然從「命令歸零」那一刻起算，不必另外清。
+// 16-bit 存取在 16-bit MCU 上為原子，不需臨界區。
+volatile int16_t g_i16EmbZeroCmdEdgeCnt = 0;
 // [e-lock] 助力段位 0 (電子鎖車) 是否作用中。1 = 段位 0，油門已被歸零且 EMB 不會放開。
 // 純觀測用 (X2CScope)，不參與任何控制判斷 —— 控制邏輯各自直接讀 u8AssistLevel。
 volatile uint8_t g_u8ELockActive = 0;
@@ -1411,6 +1422,31 @@ int main(void) {
                                             !bEmbFlipHoldoff &&
                                             (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES);
 
+                // --- [下坡滑動] 武裝／解除武裝狀態機 ---
+                //   完整理由見 userparms.h 的 EMB_DOWNHILL_* 說明。要點：
+                //   偵測式「命令歸零 + 車仍在移動」在**平路正常停車時也完全成立**
+                //   (減速距離 0.92 m ≈ 526 個邊緣)，唯一阻止誤鎖的就是這個武裝旗標，
+                //   所以它的正確性比門檻數值重要得多。
+                //   武裝點在下方 eBrakeAction == RELEASE 處 —— 機械煞車真正打開的那一刻
+                //   就是風險窗口的起點，不必分辨它來自 LOCKED 還是 WAITING_TO_LOCK。
+                static bool s_bEmbDownhillArmed = false;
+                static uint32_t s_u32EmbDownhillArmMs = 0;
+                if (s_bEmbDownhillArmed) {
+                    if ((ReferenceRAW != 0) && (HallPulsesLatch > EMB_DOWNHILL_DISARM_PULSES)) {
+                        // (b) 駕駛真的騎了一趟 → 解除武裝 (sticky，維持到下次 RELEASE)。
+                        //   ⚠ 必須同時要求「命令非零」：若只看車速，陡坡上車速會在計數達標前
+                        //   就先越過門檻而解除武裝 → 坡越陡越容易漏鎖，保護方向完全相反。
+                        s_bEmbDownhillArmed = false;
+                    } else if ((EMB_DOWNHILL_ARM_WINDOW_MS > 0) &&
+                               ((g_stSystemData.u32TimeMs - s_u32EmbDownhillArmMs) >=
+                                EMB_DOWNHILL_ARM_WINDOW_MS)) {
+                        // (a) 不依賴任何感測器的逾時解除武裝。預設停用 (0)。
+                        s_bEmbDownhillArmed = false;
+                    }
+                }
+                bool bEmbDownhillSlide = s_bEmbDownhillArmed &&
+                                         (abs(g_i16EmbZeroCmdEdgeCnt) >= EMB_DOWNHILL_SLIDE_EDGES);
+
                 // [e-lock] 助力段位 0 = 電子鎖車。段位由 LCD 經 Modbus 在執行期更新
                 //   (modbusDecode_decodeLcdData)，故騎行中切段位會即時生效。
                 //   油門命令的歸零在 s_logic_throttle.c 完成；此旗標只是禁止 EMB 放開煞車的
@@ -1424,6 +1460,7 @@ int main(void) {
                                                                        bEmbUVWLockActive,            // [Plan A] UVW短路生效中
                                                                        bEmbReverseEdge,              // [Plan B] 偵測到倒溜
                                                                        bEmbRollbackDetected,         // [有動力倒溜] 連續反向霍爾邊緣達門檻
+                                                                       bEmbDownhillSlide,            // [下坡滑動] 命令歸零後仍在移動達門檻
                                                                        (uGF.BrakeSWOn == 1),         // [IBKS] 手剎車/充電中 → 立即鎖定
                                                                        bEmbELockActive,              // [e-lock] 段位 0 → 禁止放開煞車
                                                                        g_stSystemData.u32TimeMs);
@@ -1452,10 +1489,19 @@ int main(void) {
 #endif
                         O_EM_BRAKE_CTRL_LAT = 0;  // 鎖定 (輸出LOW)
                         g_u8EmbRevEdgeCnt = 0;
+                        // [下坡滑動] (c) EMB 已上鎖 → 解除武裝。煞車夾住後車不該再動,
+                        //   風險窗口結束;計數器一併清零,理由同上方 g_u8EmbRevEdgeCnt。
+                        s_bEmbDownhillArmed = false;
+                        g_i16EmbZeroCmdEdgeCnt = 0;
                         break;
                     case EMBRAKER_ACTION_RELEASE:
                         O_EM_BRAKE_CTRL_LAT = 1;  // 釋放 (輸出HI)
                         g_u8EmbRevEdgeCnt = 0;
+                        // [下坡滑動] 武裝：機械煞車打開的這一刻就是風險窗口的起點。
+                        //   計數器歸零 —— 若不清,平路滑行累積的 526 個邊緣會在此刻直接超標。
+                        s_bEmbDownhillArmed = true;
+                        s_u32EmbDownhillArmMs = g_stSystemData.u32TimeMs;
+                        g_i16EmbZeroCmdEdgeCnt = 0;
                         break;
                     case EMBRAKER_ACTION_NONE:
                     default:
@@ -2837,10 +2883,36 @@ void DoControl(void) {
             //        HallMinPeriod)
             //            HallPeriodFiltered = HallMinPeriod;
 
+            // [FIX 2026-08-11] 移除原本的 `else if (HallPeriod <= HallMinPeriod) Speed = 32767;`
+            //   —— 那是把「物理上不可能的量測」轉換成「最大確信的極端值」。
+            //
+            //   HALL_MIN_PERIOD = 434 是 SPEED_FS_RPM(12000 馬達RPM) 對應的 Timer1 週期
+            //   (見 motor_scale.h)，而 12000 = 2.96 x MOTOR_MAX_RPM。所以
+            //   `HallPeriod <= HallMinPeriod` 代表「量到馬達物理上限 3 倍的轉速」——
+            //   它只可能來自停車顫動/接點彈跳/雜訊，絕不可能是真實速度。
+            //   刪掉分支後沒有 else，Speed 自然保持前值,這正是「本次取樣無效」該有的行為。
+            //   不改成 0(會謊稱靜止,可能在真實速度下誤觸 UVW lock 或堵轉偵測)，
+            //   也不改成上限(仍是在垃圾取樣上斷言高速)。
+            //
+            //   這一行是三個症狀的共同根因,前兩個過去分別被繞過而非修復:
+            //   (1) [堵轉放開後倒行 1m+] CalculateParkAngleHall() 的
+            //       `if (abs(Speed) <= Q15(0.02))` 低速分支刻意**不依賴 uGF.Direction**
+            //       (內層 if/else 兩邊完全相同) —— 因為近零速時方向由邊界顫動決定、不可信。
+            //       Speed=32767 讓這道防護失效 → 改走內插分支 → 吃不可信的 Direction 且
+            //       HallPeriodFiltered 塌小使角度步長爆大 → 電流向量最多錯置 120°
+            //       (HallAngle 的 ±60° 偏移 + 往錯方向推進撞上 ±60° 夾限) → 扭矩反向。
+            //       同時速度環 P 項因 32767 飽和到電流上限(清積分器擋不住,P 項不需歷史)。
+            //       → 過去用 bStallReleaseCoast 關 PWM 圍堵。
+            //   (2) [UVW lock 永遠 latch 不上] 見下方 bUvwStopCommanded 處的註解。
+            //       → 過去改用 HallPulsesLatch 取代 Speed 圍堵。
+            //   (3) [堵轉保護失效] bClearlyMoving = abs(Speed) >= Q15(0.06) 因 32767 恆為真
+            //       → 釋放計數器 500ms 後把 faultMotorStall.counter 歸零 → 顫動時堵轉計數
+            //       永遠累積不到 8 秒 → 電流砍半與 60 秒閂鎖都不啟動。此條尚未實車確認。
+            //
+            //   ⚠ (1)(2) 的圍堵措施(bStallReleaseCoast、UVW_LOCK_STOP_PULSES)**刻意保留**
+            //     作為縱深防禦,不要因為本修法就一併簡化 —— 等實車驗證過再談。
             if ((HallPeriodFiltered > HallMinPeriod) && (T1INTCnt == 0)) {
                 Speed = __builtin_divf(HallMinPeriod, HallPeriodFiltered);
-            } else if (HallPeriod <= HallMinPeriod) {
-                Speed = 32767;
             }
 
             //========= Codes below is optional, need to check actual speed
@@ -2883,6 +2955,27 @@ void DoControl(void) {
                 } else {
                     // 無有效驅動命令 → 解除武裝 (無動力倒溜由 WAITING_TO_LOCK 的 Plan B 處理)
                     g_u8EmbRevEdgeCnt = 0;
+                }
+            }
+
+            // --- [下坡滑動] 命令歸零後的「淨」位移計數 (帶號，供 EMB 立即鎖定) ---
+            //   閘門是「命令已歸零」，與倒溜計數的「命令有方向」正好互補：
+            //   命令非零時本計數持續歸零，故它天然從命令歸零那一刻起算。
+            //   符號慣例沿用上方 Speed 那行：Direction == DirectionDefault ⇒ 往負方向滾。
+            //   飽和在 ±32000 而非讓它回捲 —— 回捲會讓 |cnt| 掃過 0 而漏掉已達標的位移。
+            {
+                if (piInputOmega.inReference == 0) {
+                    if (uGF.Direction == uGF.DirectionDefault) {
+                        if (g_i16EmbZeroCmdEdgeCnt > -32000) {
+                            g_i16EmbZeroCmdEdgeCnt--;
+                        }
+                    } else {
+                        if (g_i16EmbZeroCmdEdgeCnt < 32000) {
+                            g_i16EmbZeroCmdEdgeCnt++;
+                        }
+                    }
+                } else {
+                    g_i16EmbZeroCmdEdgeCnt = 0;  // 命令非零 → 重新起算
                 }
             }
         }

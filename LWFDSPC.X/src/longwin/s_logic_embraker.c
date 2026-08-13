@@ -61,6 +61,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                                         bool bUVWLockActive,
                                         bool bReverseEdgeDetected,
                                         bool bRollbackDetected,
+                                        bool bDownhillSlideDetected,
                                         bool bBrakeSwOn,
                                         bool bELockActive,
                                         uint32_t u32CurrentTimeMs) {
@@ -142,6 +143,13 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eAction = EMBRAKER_ACTION_LOCK;
                     eNextState = EMBRAKER_STATE_LOCKED;
                     s_bRollbackLatched = true;
+                } else if (bDownhillSlideDetected) {
+                    // [下坡滑動] 命令已歸零、車卻仍在移動 → 立即鎖定，不計時。
+                    //   在 RELEASED 檢查是防禦性的：本狀態需要 bIsActive(未平滑的油門命令
+                    //   > 門檻)，而偵測的閘門是「平滑後的命令已歸零」，兩者步調不一致，
+                    //   理論上重疊窗口極短。不設閂鎖，理由見 s_logic_embraker.h。
+                    eAction = EMBRAKER_ACTION_LOCK;
+                    eNextState = EMBRAKER_STATE_LOCKED;
                 }
                 break;
 
@@ -164,6 +172,18 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eAction = EMBRAKER_ACTION_LOCK;
                     eNextState = EMBRAKER_STATE_LOCKED;
                     s_bRollbackLatched = true;
+                    s_bUvwLockTiming = false;
+                    s_bFailsafeTiming = false;
+                } else if (bDownhillSlideDetected) {
+                    // [下坡滑動] 命令已歸零、車卻仍在移動達門檻 → 立即鎖定，不計時。
+                    //   **這是本狀態的主要著力點** —— 下坡點放時後面三條路全都不通:
+                    //     bReverseEdgeDetected(Plan B) 前提是 bUVWLockActive;
+                    //     bUVWLockActive 需要車已近靜止,下坡達不到;
+                    //     failsafe 要等 EMBRAKER_LOCK_TIMEOUT_MS,屆時車速已高 → 帶速硬夾。
+                    //   在此攔下,車剛開始滑、動能極小,不適感最低。
+                    //   不設閂鎖 (與 bRollbackDetected 不同)，理由見 s_logic_embraker.h。
+                    eAction = EMBRAKER_ACTION_LOCK;
+                    eNextState = EMBRAKER_STATE_LOCKED;
                     s_bUvwLockTiming = false;
                     s_bFailsafeTiming = false;
                 } else if (bReverseEdgeDetected) {
