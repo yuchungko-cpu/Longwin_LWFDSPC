@@ -36,7 +36,11 @@ typedef enum {
 #define LOGIC_THROTTLE_FWD_VOLTAGE_MAX_MV (4800u)  // 正轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
 #define LOGIC_THROTTLE_FWD_OUTPUT_ZERO (0u)                  // 正轉電壓低於 MIN 時的目標輸出
-#define LOGIC_THROTTLE_FWD_OUTPUT_MIN RPMX10_TO_CMD(5493)    // 549.3 RPM =  1.04 km/h (= 舊值 1500)
+// [實車調校 2026-08-14] 5493 (1.04 km/h) → 5124 (512.4 RPM = 0.97 km/h = 1399 count)。
+//   與 ACCEL_FILTER_START_CMD_DEFAULT 同步下降 —— 本值是「最低可命令車速」的**真正**決定者:
+//   它同時是油門內插的地板、加速中的地板，以及加速濾波預載與每 tick 輸出的地板 (u16MinRpm)。
+//   只改 ACCEL_FILTER_START_CMD_DEFAULT 會被本值墊回去，等於沒改 (見該巨集的 ⚠)。
+#define LOGIC_THROTTLE_FWD_OUTPUT_MIN RPMX10_TO_CMD(5124)    // 512.4 RPM =  0.97 km/h (= 1399 count)
 #define LOGIC_THROTTLE_FWD_OUTPUT_MAX RPMX10_TO_CMD(43945)   // 4394.5 RPM = 8.29 km/h (= 舊值 12000)
 
 // --- 反轉油門電壓與輸出對應關係 ---

@@ -66,8 +66,18 @@ typedef enum {
 //      (4) 又結構上不涵蓋 → 三條路全不通,只剩 (3) 的 failsafe 帶速硬夾。
 //      本判斷在「車剛開始滑動」時即鎖定,動能極小,不適感最低。
 //      偵測訊號由 main.c 產生後以 bDownhillSlideDetected 傳入,RELEASED 與 WAITING_TO_LOCK
-//      兩個狀態都檢查(理由同 (4))。武裝條件與門檻見 userparms.h 的 EMB_DOWNHILL_*。
-#define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 50  // UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定
+//      兩個狀態都檢查(理由同 (4))。判別方式與門檻見 userparms.h 的 EMB_DOWNHILL_*：
+//      「命令歸零 + 霍爾週期沒有變長(= 沒在減速) + 車速低於上限 + 位移達門檻」。
+//      ⚠ 自由滑行的阻力恆為正 ⇒ 平路與上坡的週期必然逐步變長,故本偵測在平路正常停車時
+//        結構上不成立 —— 這是它不再需要 V0.20 那個「武裝旗標」的原因(該旗標的解除門檻
+//        低於油門最低命令速度,反而讓功能整條失效,已移除)。
+// UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定。
+// [實車調校 2026-08-14] 50 → 150。50ms 時機械夾緊仍略早於車速真正到 0，停車瞬間有應力
+//   頓挫感;150ms 讓 UVW 短路有足夠時間把馬達帶到靜止再夾，實測頓挫消除。
+//   ⚠ 這顆沒有安全代價 (延遲期間 UVW 短路仍在制動)，是停車舒適性的首選旋鈕;
+//     不要為了同樣目的去改 UVW_LOCK_STOP_PULSES 或 EMBRAKER_LOCK_TIMEOUT_MS，那兩個都有
+//     保護職責 (見各自的說明)。上限建議不超過 300ms，否則坡上會有一段無機械煞車的空窗。
+#define EMBRAKER_SHORT_TO_LOCK_DELAY_MS 150
 // 命令歸零後逾時強制鎖定的故障安全網 (ms)。[實車調校 2026-08-10] 3000 → 1000。
 //   縮短的理由：下坡滑行時三條正常路徑全部不可達 —— UVW lock 進不去(HallPulsesLatch 遠大於
 //   UVW_LOCK_STOP_PULSES)、Plan B 必須先有 UVW、有動力倒溜偵測又因命令降到
@@ -82,7 +92,7 @@ typedef enum {
 //     與煞車片磨耗是可接受的代價。
 //     ⇒ **不要為了舒適性而加車速閘門。** 那會讓最後一道保底在最需要它的時候放行。
 //     舒適性要從「讓更早的路徑先接手」解決 —— 那是上面 (5) 下坡滑動偵測的職責
-//     (EMB_DOWNHILL_*,42mm 就攔下,此時動能極小)。本計時只負責「無論如何都要停下來」。
+//     (EMB_DOWNHILL_*,26mm 就攔下,此時動能極小)。本計時只負責「無論如何都要停下來」。
 #define EMBRAKER_LOCK_TIMEOUT_MS 1000
 
 // --- 以下參數目前未作為 EMB 動作條件 (保留定義供參考) ---
@@ -107,8 +117,8 @@ bool logic_embraker_init(uint16_t u16IembMv);
  * @param bReverseEdgeDetected [Plan B] 是否偵測到倒溜(與行駛方向相反的霍爾邊緣)
  * @param bRollbackDetected [有動力倒溜] 連續反向霍爾邊緣達 EMB_ROLLBACK_REV_EDGES(main.c 算好傳入)
  *                          → 立即鎖定並閂鎖至鬆油門。RELEASED、WAITING_TO_LOCK 兩個狀態都會檢查。
- * @param bDownhillSlideDetected [下坡滑動] 命令歸零後仍持續移動達 EMB_DOWNHILL_SLIDE_EDGES
- *                          (main.c 算好傳入，含武裝條件) → **立即鎖定**，不經 UVW 延遲也不等
+ * @param bDownhillSlideDetected [下坡滑動] 命令歸零後車仍被重力加速且位移達門檻
+ *                          (main.c 算好傳入，含車速上限閘門) → **立即鎖定**，不經 UVW 延遲也不等
  *                          timeout failsafe。與 bRollbackDetected **刻意不同**：不設閂鎖。
  *                          倒溜閂鎖是為了擋「坡上仍握著油門 → LOCKED 的運轉前檢查又放開 →
  *                          再次倒溜」的循環；下坡滑動的觸發前提是駕駛已經放掉油門，

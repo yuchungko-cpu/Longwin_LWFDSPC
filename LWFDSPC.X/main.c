@@ -254,6 +254,16 @@ volatile uint8_t g_u8EmbRevEdgeCnt = 0;
 // 命令非零時持續歸零 → 計數天然從「命令歸零」那一刻起算，不必另外清。
 // 16-bit 存取在 16-bit MCU 上為原子，不需臨界區。
 volatile int16_t g_i16EmbZeroCmdEdgeCnt = 0;
+// [下坡滑動] 「命令歸零後車沒有減速」的連續確認次數。CNRead_Inline 以霍爾週期比較累加，
+// 20ms 的 EMB 任務讀取。自由滑行的阻力恆為正 → 平路與上坡的週期必然逐步變長，因此
+// 「週期沒變長」等價於「重力已抵銷全部阻力，車不會自己停」。這是唯一不依賴車速門檻、
+// 也不依賴跨迴圈狀態的判別，故它取代了 V0.20 的武裝旗標 (s_bEmbDownhillArmed，為何移除
+// 見 userparms.h 的 EMB_DOWNHILL_* 說明)。
+// 車速上限閘門 (EMB_DOWNHILL_MIN_PERIOD) 也在 ISR 內一併判斷 —— 計數只在上限以下累加，
+// 因此「本計數達標」已內含「車速夠低、夾煞可接受」。
+// ⚠ 與上面兩個計數器同理：只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE
+//   動作處必須清零 (見該處註解)。8-bit 存取在 16-bit MCU 上為原子，不需臨界區。
+volatile uint8_t g_u8EmbNoDecelCnt = 0;
 // [e-lock] 助力段位 0 (電子鎖車) 是否作用中。1 = 段位 0，油門已被歸零且 EMB 不會放開。
 // 純觀測用 (X2CScope)，不參與任何控制判斷 —— 控制邏輯各自直接讀 u8AssistLevel。
 volatile uint8_t g_u8ELockActive = 0;
@@ -1422,30 +1432,21 @@ int main(void) {
                                             !bEmbFlipHoldoff &&
                                             (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES);
 
-                // --- [下坡滑動] 武裝／解除武裝狀態機 ---
-                //   完整理由見 userparms.h 的 EMB_DOWNHILL_* 說明。要點：
-                //   偵測式「命令歸零 + 車仍在移動」在**平路正常停車時也完全成立**
-                //   (減速距離 0.92 m ≈ 526 個邊緣)，唯一阻止誤鎖的就是這個武裝旗標，
-                //   所以它的正確性比門檻數值重要得多。
-                //   武裝點在下方 eBrakeAction == RELEASE 處 —— 機械煞車真正打開的那一刻
-                //   就是風險窗口的起點，不必分辨它來自 LOCKED 還是 WAITING_TO_LOCK。
-                static bool s_bEmbDownhillArmed = false;
-                static uint32_t s_u32EmbDownhillArmMs = 0;
-                if (s_bEmbDownhillArmed) {
-                    if ((ReferenceRAW != 0) && (HallPulsesLatch > EMB_DOWNHILL_DISARM_PULSES)) {
-                        // (b) 駕駛真的騎了一趟 → 解除武裝 (sticky，維持到下次 RELEASE)。
-                        //   ⚠ 必須同時要求「命令非零」：若只看車速，陡坡上車速會在計數達標前
-                        //   就先越過門檻而解除武裝 → 坡越陡越容易漏鎖，保護方向完全相反。
-                        s_bEmbDownhillArmed = false;
-                    } else if ((EMB_DOWNHILL_ARM_WINDOW_MS > 0) &&
-                               ((g_stSystemData.u32TimeMs - s_u32EmbDownhillArmMs) >=
-                                EMB_DOWNHILL_ARM_WINDOW_MS)) {
-                        // (a) 不依賴任何感測器的逾時解除武裝。預設停用 (0)。
-                        s_bEmbDownhillArmed = false;
-                    }
-                }
-                bool bEmbDownhillSlide = s_bEmbDownhillArmed &&
-                                         (abs(g_i16EmbZeroCmdEdgeCnt) >= EMB_DOWNHILL_SLIDE_EDGES);
+                // --- [下坡滑動] 命令歸零後車卻沒有在減速 → 立即上鎖 ---
+                //   完整理由見 userparms.h 的 EMB_DOWNHILL_* 說明。三個閘門：
+                //     (1) 命令已歸零   —— g_i16EmbZeroCmdEdgeCnt 的計數閘門天然提供
+                //     (2) 車沒有減速   —— g_u8EmbNoDecelCnt (ISR 內比較霍爾週期有沒有變長;
+                //                        滑行阻力恆為正 ⇒ 沒變長就是重力已抵銷全部阻力)
+                //     (3) 車速低於上限 —— 同在 ISR 內，以週期下限實作，已內含於 (2) 的累加
+                //   此處只讀 ISR 的結果，再加位移門檻作為雜訊裕度。
+                //   ⚠ V0.20 的武裝旗標 (s_bEmbDownhillArmed) 已移除，**不要加回來**：它的
+                //     解除門檻 (0.5 km/h) 低於油門的最低命令速度 (1.04 km/h)，「按油門」本身
+                //     就會在駕駛放開之前解除武裝 → 下坡點放永遠偵測不到 (V0.20 實車確認)。
+                //     現在改由 (2) 的物理判別擋平路誤鎖、(3) 的速度上限限制不適感，兩者都不
+                //     需要跨迴圈狀態，因此也沒有「旗標卡住 → 平路停車帶速硬夾」的單點失效。
+                bool bEmbDownhillSlide =
+                        (g_u8EmbNoDecelCnt >= EMB_DOWNHILL_NODECEL_CONFIRM) &&
+                        (abs(g_i16EmbZeroCmdEdgeCnt) >= EMB_DOWNHILL_SLIDE_EDGES);
 
                 // [e-lock] 助力段位 0 = 電子鎖車。段位由 LCD 經 Modbus 在執行期更新
                 //   (modbusDecode_decodeLcdData)，故騎行中切段位會即時生效。
@@ -1489,19 +1490,19 @@ int main(void) {
 #endif
                         O_EM_BRAKE_CTRL_LAT = 0;  // 鎖定 (輸出LOW)
                         g_u8EmbRevEdgeCnt = 0;
-                        // [下坡滑動] (c) EMB 已上鎖 → 解除武裝。煞車夾住後車不該再動,
-                        //   風險窗口結束;計數器一併清零,理由同上方 g_u8EmbRevEdgeCnt。
-                        s_bEmbDownhillArmed = false;
+                        // [下坡滑動] 偵測已被執行,位移預算用掉;煞車夾住後車不該再動,
+                        //   兩個計數器一併清零,理由同上方 g_u8EmbRevEdgeCnt。
                         g_i16EmbZeroCmdEdgeCnt = 0;
+                        g_u8EmbNoDecelCnt = 0;
                         break;
                     case EMBRAKER_ACTION_RELEASE:
                         O_EM_BRAKE_CTRL_LAT = 1;  // 釋放 (輸出HI)
                         g_u8EmbRevEdgeCnt = 0;
-                        // [下坡滑動] 武裝：機械煞車打開的這一刻就是風險窗口的起點。
-                        //   計數器歸零 —— 若不清,平路滑行累積的 526 個邊緣會在此刻直接超標。
-                        s_bEmbDownhillArmed = true;
-                        s_u32EmbDownhillArmMs = g_stSystemData.u32TimeMs;
+                        // [下坡滑動] 每次放煞車都從零起算。ISR 在「命令非零」時本來就會清這
+                        //   兩個計數器,但車被夾住不動時 ISR 完全不執行 → 會凍結在達標值,
+                        //   放開煞車的下一個 20ms tick 就立刻重鎖。理由同 g_u8EmbRevEdgeCnt。
                         g_i16EmbZeroCmdEdgeCnt = 0;
+                        g_u8EmbNoDecelCnt = 0;
                         break;
                     case EMBRAKER_ACTION_NONE:
                     default:
@@ -2860,6 +2861,11 @@ void DoControl(void) {
         if (OldHallState != HallState) {
             TMRLatch = TMR1;
             TMR1 = 0;
+            // [下坡滑動] T1INTCnt 在下一行就被歸零，但「Timer1 這段期間是否溢位過」決定了
+            //   TMRLatch 可不可信 (溢位 = 週期 > 65535 ticks，即車速低於約 0.15 km/h，
+            //   TMRLatch 只是取模後的殘值)。加速判別必須比較真實週期，故在歸零前取樣。
+            //   附帶效果：車停過 (>42ms 無邊緣) 必然溢位 → 正好用來作廢跨越停車的舊週期。
+            unsigned int u16T1OvfAtEdge = T1INTCnt;
             T1INTCnt = 0;
             HallPeriod = TMRLatch;
             GetHallAngleAuto_Inline();  // OldHallState updates here.
@@ -2963,7 +2969,19 @@ void DoControl(void) {
             //   命令非零時本計數持續歸零，故它天然從命令歸零那一刻起算。
             //   符號慣例沿用上方 Speed 那行：Direction == DirectionDefault ⇒ 往負方向滾。
             //   飽和在 ±32000 而非讓它回捲 —— 回捲會讓 |cnt| 掃過 0 而漏掉已達標的位移。
+            //
+            //   同一個閘門下並行「沒有減速判別 + 車速上限」，產出 g_u8EmbNoDecelCnt：
+            //   自由滑行的阻力恆為正 ⇒ 平路/上坡的霍爾週期必然逐步變長，「沒變長」就代表
+            //   重力已抵銷全部阻力、車不會自己停。這是區分「平路正常滑行到停」與「下坡
+            //   溜車」的唯一物理依據，且門檻只需贏過量測雜訊，與坡度陡緩無關
+            //   (完整理由與參數取值見 userparms.h 的 EMB_DOWNHILL_* 說明)。
             {
+                // 相隔 EMB_DOWNHILL_NODECEL_LOOKBACK 個邊緣的週期環形緩衝。取 6 的倍數使
+                //   比較的兩筆是同一組霍爾狀態轉換，感測器裝配不等距的誤差因此對消。
+                static uint16_t su16EmbPeriodRing[EMB_DOWNHILL_NODECEL_LOOKBACK] = {0};
+                static uint8_t su8EmbPeriodIdx = 0;
+                static uint8_t su8EmbPeriodFill = 0;
+
                 if (piInputOmega.inReference == 0) {
                     if (uGF.Direction == uGF.DirectionDefault) {
                         if (g_i16EmbZeroCmdEdgeCnt > -32000) {
@@ -2974,8 +2992,43 @@ void DoControl(void) {
                             g_i16EmbZeroCmdEdgeCnt++;
                         }
                     }
+
+                    if (u16T1OvfAtEdge != 0u) {
+                        // Timer1 溢位過 → 本次 HallPeriod 是取模殘值，不可用於比較；
+                        //   且這代表車曾靜止或極慢 (<0.15 km/h)，緩衝內的舊週期已跨越那段
+                        //   空白，同樣不可信 → 整組作廢重新累積。
+                        su8EmbPeriodFill = 0u;
+                        g_u8EmbNoDecelCnt = 0u;
+                    } else {
+                        uint16_t u16Old = su16EmbPeriodRing[su8EmbPeriodIdx];  // LOOKBACK 個邊緣前
+                        su16EmbPeriodRing[su8EmbPeriodIdx] = HallPeriod;
+                        if (++su8EmbPeriodIdx >= EMB_DOWNHILL_NODECEL_LOOKBACK) {
+                            su8EmbPeriodIdx = 0u;
+                        }
+                        if (su8EmbPeriodFill < EMB_DOWNHILL_NODECEL_LOOKBACK) {
+                            su8EmbPeriodFill++;  // 緩衝未滿，還沒有可比較的對象
+                        } else if ((HallPeriod > EMB_DOWNHILL_MIN_PERIOD) &&
+                                   ((HallPeriod <= u16Old) ||
+                                    ((uint16_t)(HallPeriod - u16Old) <=
+                                     (uint16_t)(u16Old >> EMB_DOWNHILL_NODECEL_TOL_SHIFT)))) {
+                            // 週期沒有變長(容忍雜訊 1/2^TOL_SHIFT) = 沒在減速 = 重力已抵銷
+                            //   全部阻力,車不會自己停;且車速仍在夾煞可接受的上限以下
+                            //   (週期下限 = 速度上限;上限之上交回 UVW 短路/回充處理)。
+                            // ⚠ 寫成「差值 <= 容忍」而非「HallPeriod <= u16Old + 容忍」:
+                            //   後者在 16-bit 上會溢位 (u16Old > 61680,即 0.16 km/h 以下),
+                            //   使門檻回捲成極小值 → 該速度帶靜默失效。先比大小再相減即可
+                            //   全程留在 16-bit 且不可能溢位 (與倒溜計數同一個寫法紀律)。
+                            if (g_u8EmbNoDecelCnt < 255u) {
+                                g_u8EmbNoDecelCnt++;
+                            }
+                        } else {
+                            g_u8EmbNoDecelCnt = 0u;  // 要求「連續」成立，斷一次就重算
+                        }
+                    }
                 } else {
                     g_i16EmbZeroCmdEdgeCnt = 0;  // 命令非零 → 重新起算
+                    su8EmbPeriodFill = 0u;       // 驅動中的週期不可拿來與滑行期比較
+                    g_u8EmbNoDecelCnt = 0u;
                 }
             }
         }

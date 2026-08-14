@@ -136,8 +136,15 @@ typedef struct
 #error "ACCEL_FILTER_CURVE_SELECT 必須是 1~7"
 #endif
 
-// 起始速度預設值 = 原本的 OUTPUT_MIN (549.3 RPM = 1.04 km/h)
-#define ACCEL_FILTER_START_CMD_DEFAULT RPMX10_TO_CMD(5493)
+// 起始速度預設值 (起步時直接預載到此值，省掉從 0 爬升的那段)。
+// [實車調校 2026-08-14] 5493 (549.3 RPM = 1.04 km/h) → 5124 (512.4 RPM = 0.97 km/h = 1399
+//   count)，起步較平順。
+//   ⚠ 本值**必須與 LOGIC_THROTTLE_FWD_OUTPUT_MIN 一起改**，單獨改沒有任何效果：
+//     logic_motor_getUpdateParamsFiltered() 的預載路徑在套完本值之後還會套 u16MinRpm 地板
+//     (`if (u16Seed < u16MinRpm) u16Seed = u16MinRpm;`)，且每個 tick 的輸出也有同一道地板;
+//     而 u16MinRpm 由呼叫端傳入 = LOGIC_THROTTLE_FWD_OUTPUT_MIN。兩者不一致時，效果一律由
+//     **較大的那個**決定。同理，油門模組自己也把 TargetRpm 的地板設在該值。
+#define ACCEL_FILTER_START_CMD_DEFAULT RPMX10_TO_CMD(5124)
 
 // 曲線索引 0~6 對應曲線 1~7 (eAccelCurve A0 = 第 1 組)。
 // R (counts/tick, tick=2ms) → 加速率 / 由起始速度到 8.29 km/h 的到達時間：
@@ -253,7 +260,11 @@ typedef struct
 // ============================================================================
 #define REV_ACCEL_FILTER_RATE 8u                                      // 每 tick 遞增 count
 #define REV_ACCEL_FILTER_SHIFT 7u                                     // τ = 256 ms
-#define REV_ACCEL_FILTER_START_CMD ACCEL_FILTER_START_CMD_DEFAULT     // 起始預載 1500
+// 起始預載。沿用正轉的預設值 (現為 1399 count)，但**反轉的實際預載仍是 1500** ——
+//   LOGIC_THROTTLE_REV_OUTPUT_MIN 維持 5493 未動，u16MinRpm 地板會把它墊回去。
+//   [2026-08-14] 刻意如此：正轉起步的平順化已實車驗證，反轉手感未測，不連帶改動。
+//   若日後要讓反轉一起降，改 LOGIC_THROTTLE_REV_OUTPUT_MIN，不是改這一行。
+#define REV_ACCEL_FILTER_START_CMD ACCEL_FILTER_START_CMD_DEFAULT
 
 // 反轉減速：原反轉減速表為 -10~-22 counts/ms,等效 20~44 counts/tick,取中段 32。
 //   4000 counts 全程 250 ms,τ=32 ms 佔 13%。

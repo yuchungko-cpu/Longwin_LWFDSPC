@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>下坡滑行偵測 調整速查 V0.21</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0; --accent:#4ea1ff;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1000px; margin:0 auto; padding:26px 18px 50px; }
+  h1 { font-size:1.55rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:15px 19px 19px; margin:0 0 16px; }
+  h2 { font-size:1.12rem; margin:0 0 9px; }
+  h2 .n { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.9rem;
+          margin-right:8px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:6px 0; font-size:.84rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.81rem; color:#ffd580; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0 0; font-size:.85rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:0 0 10px; font-size:.86rem; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.75rem; margin-right:5px; }
+  .foot { color:var(--muted); font-size:.78rem; text-align:center; margin-top:24px; }
+  /* ---- 列印 / PDF：淺色 + 壓成單頁 A4，適合現場攜帶 ---- */
+  @media print {
+    @page { size:A4; margin:9mm 9mm; }
+    :root { --bg:#fff; --card:#fff; --fg:#111; --muted:#555; --accent:#0b5cad;
+            --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:8.4pt; line-height:1.32; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:13pt; margin:0 0 2px; }
+    .sub { margin:0 0 7px; font-size:7.6pt; }
+    h2 { font-size:10pt; margin:0 0 5px; }
+    h2 .n { width:19px; height:19px; line-height:19px; font-size:7.8pt;
+            background:#0b5cad; color:#fff; margin-right:6px; }
+    .card { border:1px solid #b9c2cc; border-radius:6px; margin:0 0 6px; padding:7px 10px 8px;
+            break-inside:avoid; page-break-inside:avoid; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; padding:0 3px; }
+    table { font-size:7.3pt; margin:4px 0; } th,td { padding:2.6px 5px; }
+    th { background:#e6eef8 !important; font-size:7.3pt; }
+    tr,td,th { break-inside:avoid; }
+    td.val { color:#7a4b00; } td.f { color:#8a3a00; font-size:7.1pt; }
+    tr.hi td { background:#fffbe8 !important; }
+    .danger { background:#ffece9; border-left-color:#c0271a; padding:5px 9px;
+              margin:6px 0 0; font-size:7.5pt; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; padding:5px 9px;
+          margin:0 0 6px; font-size:7.9pt; }
+    .k { background:#ffd23f; color:#1a1200; font-size:7pt; padding:0 4px; }
+    .sub,.foot { color:#555; } .foot { margin-top:8px; font-size:7pt; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>下坡滑行偵測 — 調整速查</h1>
+  <p class="sub">LWFDSPC <b>V0.21</b> · 2026-08-14 · 參數全在 <code>src/userparms.h</code>，改完需重新編譯燒錄</p>
+
+  <div class="card">
+    <h2><span class="n">1</span>它在做什麼</h2>
+    <div class="ok"><b>停在坡上點一下油門又放掉 → 車開始溜 → 在 26 mm 內夾住 EMB。</b><br>
+      判斷依據：<b>命令歸零後霍爾週期沒有變長，就是沒在減速</b>（平路自由滑行一定會減速，週期一定變長）。<br>
+      V0.20 是滑到 1 秒保命鎖才夾（10% 坡約 60 cm / 3.9 km/h）；V0.21 為 2.6 cm / 1.2 km/h。</div>
+    <p style="margin:0">四個條件同時成立才夾：<b>①</b> 油門命令已歸零　<b>②</b> 週期沒變長（連續 3 次）
+       　<b>③</b> 車速低於 3 km/h　<b>④</b> 已滑 15 個霍爾邊緣（26 mm）</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span>參數</h2>
+    <table>
+      <tr><th style="width:30px"></th><th style="width:290px">巨集</th><th style="width:56px">行號</th>
+          <th style="width:88px">現值</th><th>說明</th></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_NODECEL_TOL_SHIFT</td>
+        <td class="c">419</td><td class="val">6<br>(1.6%)</td>
+        <td><b>靈敏度，幾乎只需調這一顆。</b>調 <b>5</b> = 放寬（抓更緩的坡）、調 <b>7</b> = 收緊（更不易誤鎖）</td></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_MAX_SPEED_KMHX10</td>
+        <td class="c">462</td><td class="val">30<br>(3 km/h)</td>
+        <td>夾煞車速上限，超過就不夾。嫌衝擊大可降到 25；<b>不可低於 15</b>（陡坡會漏鎖，護欄會擋）</td></tr>
+      <tr><td></td><td class="f">EMB_DOWNHILL_NODECEL_LOOKBACK</td><td class="c">405</td><td class="val">12</td>
+        <td>週期比較基線。<b>必須是 6 的倍數</b>。顛簸地面誤鎖可改 18</td></tr>
+      <tr><td></td><td class="f">EMB_DOWNHILL_NODECEL_CONFIRM</td><td class="c">424</td><td class="val">3</td>
+        <td>連續確認次數。誤鎖可改 5（偵測位移等量增加）</td></tr>
+      <tr><td></td><td class="f">EMB_DOWNHILL_SLIDE_EDGES</td><td class="c">433</td><td class="val">15<br>(26 mm)</td>
+        <td>位移門檻，1 邊緣 = 1.75 mm。想晚一點夾才改（例如 24 = 42 mm）；設小於 15 無效</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span>症狀 → 怎麼調</h2>
+    <table>
+      <tr><th style="width:330px">症狀</th><th>動作</th></tr>
+      <tr class="hi"><td>下坡點放，還是滑很遠才夾</td><td><code>TOL_SHIFT</code> 6 → <b>5</b></td></tr>
+      <tr class="hi"><td>平路點放，煞車會咬住／有頓感</td><td><code>TOL_SHIFT</code> 6 → <b>7</b>；仍有則 <code>SLIDE_EDGES</code> 改 <b>24</b></td></tr>
+      <tr><td>顛簸地面偶爾誤鎖</td><td><code>CONFIRM</code> 3 → <b>5</b> 或 <code>LOOKBACK</code> 12 → <b>18</b></td></tr>
+      <tr><td>下坡夾車衝擊太大</td><td><code>MAX_SPEED_KMHX10</code> 30 → <b>25</b></td></tr>
+      <tr><td>極緩坡（3~5%）慢慢溜</td><td><code>TOL_SHIFT</code> 6 → <b>5</b>。抓不到也不危險 —— 那種坡車幾乎不加速，1 秒保命鎖會在極低速接手</td></tr>
+      <tr><td>平路<b>正常停車</b>（不是點放）有頓挫</td><td>與本功能無關。改 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code>
+          （<code>s_logic_embraker.h:80</code>，現 150 ms，可試 150~300）</td></tr>
+    </table>
+    <div class="danger"><b>不要做：</b>① 不要把 V0.20 的武裝旗標 <code>s_bEmbDownhillArmed</code> 加回來（它的解除門檻低於油門最低命令速度，
+      會讓功能整條失效，這就是 V0.20 失效的原因）　② 不要為了舒適性給 <code>EMBRAKER_LOCK_TIMEOUT_MS</code> 加車速閘門（最後保底）</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span>實車驗收（3 項）</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:250px">測試</th><th>合格標準</th></tr>
+      <tr class="hi"><td class="c">1</td><td>平路點放油門 ×10 次（室內定位微調）</td>
+          <td>車還在滾時<b>不應</b>咬住，停車手感與 V0.20 相同</td></tr>
+      <tr class="hi"><td class="c">2</td><td>10% 坡停住後點放油門</td>
+          <td>約 <b>2~3 cm</b>（一個指節）內夾住，車速約 1.2 km/h</td></tr>
+      <tr><td class="c">3</td><td>最陡可用坡道（≥20%）重複測試 2</td>
+          <td>同樣 2~3 cm 內夾住，<b>絕不可</b>掉到 1 秒保命鎖</td></tr>
+    </table>
+    <p style="margin:8px 0 0; font-size:.85rem">X2CScope 在本專案不可用，建議坡道貼尺標 + 手機錄影逐格看夾煞位置。<br>
+       順便確認本版另兩項：<code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 150 ms（停車頓挫應消除）、
+       最低命令速度 0.97 km/h（起步應更平順）。</p>
+  </div>
+
+  <p class="foot">LWFDSPC V0.21 · 下坡滑行偵測調整速查 · 2026-08-14 · 坡度／位移／車速為理論估算，尚待實車驗證</p>
+</div>
+</body>
+</html>
