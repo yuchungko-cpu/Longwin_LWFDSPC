@@ -344,10 +344,12 @@ static const S_ACCEL_FILTER_CURVE_T scsAccelFilterCurves[ACCEL_FILTER_CURVE_COUN
     ACCEL_FILTER_CURVE_TABLE_INIT;
 static const S_DECEL_FILTER_CURVE_T scsDecelFilterCurves[DECEL_FILTER_CURVE_COUNT] =
     DECEL_FILTER_CURVE_TABLE_INIT;
-static const S_ACCEL_FILTER_CURVE_T scsRevAccelFilterCurve = {
-    REV_ACCEL_FILTER_RATE, REV_ACCEL_FILTER_SHIFT, REV_ACCEL_FILTER_START_CMD};
-static const S_DECEL_FILTER_CURVE_T scsRevDecelFilterCurve = {
-    REV_DECEL_FILTER_RATE, REV_DECEL_FILTER_SHIFT, REV_DECEL_FILTER_SNAP};
+// 反轉 5 段曲線。段位在程式內固定 (REV_FILTER_CURVE_SELECT)，加減速共用同一個索引 ——
+//   理由見 s_logic_motor.h 的說明。索引由編譯期常數決定，不需邊界夾制 (有 #error 護欄)。
+static const S_ACCEL_FILTER_CURVE_T scsRevAccelFilterCurves[REV_FILTER_CURVE_COUNT] =
+    REV_ACCEL_FILTER_CURVE_TABLE_INIT;
+static const S_DECEL_FILTER_CURVE_T scsRevDecelFilterCurves[REV_FILTER_CURVE_COUNT] =
+    REV_DECEL_FILTER_CURVE_TABLE_INIT;
 
 static uint16_t su16AccelFilterRateLimited = 0;  // 限斜率後的目標 (count)
 static uint32_t su32AccelFilterState = 0;        // 濾波狀態 (count << FRAC_BITS)
@@ -384,10 +386,14 @@ int8_t logic_motor_getUpdateParamsFiltered(uint16_t *pu16ActiveRpm,
     bool bDecel = (u16TargetRpm < u16CurrentRpm);
 
     // 四象限選參數：正轉/反轉 × 加速/減速
+    //   正轉的段位由呼叫端傳入 (加速段位可能來自 Modbus，故已在上方夾制邊界);
+    //   反轉的段位是編譯期常數 REV_FILTER_CURVE_INDEX，加減速共用。
     const S_ACCEL_FILTER_CURVE_T *pcsAccel =
-            bReverse ? &scsRevAccelFilterCurve : &scsAccelFilterCurves[u8CurveIndex];
+            bReverse ? &scsRevAccelFilterCurves[REV_FILTER_CURVE_INDEX]
+                     : &scsAccelFilterCurves[u8CurveIndex];
     const S_DECEL_FILTER_CURVE_T *pcsDecel =
-            bReverse ? &scsRevDecelFilterCurve : &scsDecelFilterCurves[u8DecelCurveIndex];
+            bReverse ? &scsRevDecelFilterCurves[REV_FILTER_CURVE_INDEX]
+                     : &scsDecelFilterCurves[u8DecelCurveIndex];
     uint8_t u8Rate = bDecel ? pcsDecel->u8RateCountsPerTick : pcsAccel->u8RateCountsPerTick;
     uint8_t u8Shift = bDecel ? pcsDecel->u8FilterShift : pcsAccel->u8FilterShift;
 

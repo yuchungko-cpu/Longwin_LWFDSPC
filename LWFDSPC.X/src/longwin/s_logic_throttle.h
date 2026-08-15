@@ -36,20 +36,24 @@ typedef enum {
 #define LOGIC_THROTTLE_FWD_VOLTAGE_MAX_MV (4800u)  // 正轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
 #define LOGIC_THROTTLE_FWD_OUTPUT_ZERO (0u)                  // 正轉電壓低於 MIN 時的目標輸出
-// [實車調校 2026-08-14] 5493 (1.04 km/h) → 5124 (512.4 RPM = 0.97 km/h = 1399 count)。
-//   與 ACCEL_FILTER_START_CMD_DEFAULT 同步下降 —— 本值是「最低可命令車速」的**真正**決定者:
-//   它同時是油門內插的地板、加速中的地板，以及加速濾波預載與每 tick 輸出的地板 (u16MinRpm)。
-//   只改 ACCEL_FILTER_START_CMD_DEFAULT 會被本值墊回去，等於沒改 (見該巨集的 ⚠)。
-#define LOGIC_THROTTLE_FWD_OUTPUT_MIN RPMX10_TO_CMD(5124)    // 512.4 RPM =  0.97 km/h (= 1399 count)
-#define LOGIC_THROTTLE_FWD_OUTPUT_MAX RPMX10_TO_CMD(43945)   // 4394.5 RPM = 8.29 km/h (= 舊值 12000)
+// [實車調校 2026-08-14] 1.04 → 0.97 km/h，起步較平順。
+//   本值是「最低可命令車速」的**真正**決定者：它同時是油門內插的地板、加速中的地板，
+//   以及加速濾波預載與每 tick 輸出的地板 (u16MinRpm)。只改
+//   ACCEL_FILTER_START_CMD_DEFAULT 會被本值墊回去，等於沒改 (見該巨集的 ⚠)。
+#define LOGIC_THROTTLE_FWD_OUTPUT_MIN KMHX100_TO_CMD(97)     // 0.97 km/h — 正轉起步速度
+#define LOGIC_THROTTLE_FWD_OUTPUT_MAX KMHX100_TO_CMD(829)    // 8.29 km/h — 油門滿刻度 (實機約 7.2)
 
 // --- 反轉油門電壓與輸出對應關係 ---
 #define LOGIC_THROTTLE_REV_VOLTAGE_MIN_MV (1200u)  // 反轉油門有效起始電壓 (對應輸出 MIN)，提高 deadzone 抑制低端誤觸/抖動
 #define LOGIC_THROTTLE_REV_VOLTAGE_MAX_MV (4800u)  // 反轉油門最大有效電壓 ( >= 此值則目標為 MAX)
 
+// 倒退**只有一段速度**，不受助力段位影響 (見 s_logic_throttle.c 的 u16OutputMax 指派:
+//   正轉吃段位表，反轉固定用 REV_OUTPUT_MAX)。段位 0(電子鎖車) 會一併擋掉倒退。
+// [2026-08-14] 改以 km/h 表達，取代原本的 RPM 寫法。0.01 km/h 解析度剛好保住實車測 OK
+//   的原值 (1.04 / 2.76 km/h)，count 僅因四捨五入差 +0.1%，手感不受影響。
 #define LOGIC_THROTTLE_REV_OUTPUT_ZERO (0u)                 // 反轉電壓低於 MIN 時的目標輸出
-#define LOGIC_THROTTLE_REV_OUTPUT_MIN RPMX10_TO_CMD(5493)   // 549.3 RPM = 1.04 km/h (= 舊值 1500)
-#define LOGIC_THROTTLE_REV_OUTPUT_MAX RPMX10_TO_CMD(14648)  // 1464.8 RPM = 2.76 km/h (= 舊值 4000)
+#define LOGIC_THROTTLE_REV_OUTPUT_MIN KMHX100_TO_CMD(104)   // 1.04 km/h — 倒退起步速度
+#define LOGIC_THROTTLE_REV_OUTPUT_MAX KMHX100_TO_CMD(276)   // 2.76 km/h — 倒退唯一的速度上限
 
 // 開機安全檢查
 // 「已釋放」的定義必須與「會出力」的門檻一致，否則會出現「不出力但永久抑制」的死角：
@@ -78,11 +82,11 @@ typedef enum {
 #define LOGIC_THROTTLE_FWD_ACCEL_V3_MV (3000u)
 #define LOGIC_THROTTLE_FWD_ACCEL_V4_MV (3900u)
 
-// 減速段 (輸出值下降)
-#define LOGIC_THROTTLE_FWD_DECEL_O1 RPMX10_TO_CMD(13184)  // 1318.4 RPM = 2.49 km/h (= 舊值 3600)
-#define LOGIC_THROTTLE_FWD_DECEL_O2 RPMX10_TO_CMD(20874)  // 2087.4 RPM = 3.94 km/h (= 舊值 5700)
-#define LOGIC_THROTTLE_FWD_DECEL_O3 RPMX10_TO_CMD(28564)  // 2856.4 RPM = 5.39 km/h (= 舊值 7800)
-#define LOGIC_THROTTLE_FWD_DECEL_O4 RPMX10_TO_CMD(36255)  // 3625.5 RPM = 6.84 km/h (= 舊值 9900)
+// 減速段 (輸出值下降)。這四個是「用哪一段減速率」的切換門檻，不是速度限制。
+#define LOGIC_THROTTLE_FWD_DECEL_O1 KMHX100_TO_CMD(249)  // 2.49 km/h
+#define LOGIC_THROTTLE_FWD_DECEL_O2 KMHX100_TO_CMD(394)  // 3.94 km/h
+#define LOGIC_THROTTLE_FWD_DECEL_O3 KMHX100_TO_CMD(539)  // 5.39 km/h
+#define LOGIC_THROTTLE_FWD_DECEL_O4 KMHX100_TO_CMD(684)  // 6.84 km/h
 
 // --- 反轉加速/減速 Step/Time 表格 ---
 // 加速段 (電壓上升)
@@ -91,11 +95,11 @@ typedef enum {
 #define LOGIC_THROTTLE_REV_ACCEL_V3_MV (3000u)
 #define LOGIC_THROTTLE_REV_ACCEL_V4_MV (3900u)
 
-// 減速段 (輸出值下降)
-#define LOGIC_THROTTLE_REV_DECEL_O1 RPMX10_TO_CMD(7324)   //  732.4 RPM = 1.38 km/h (= 舊值 2000)
-#define LOGIC_THROTTLE_REV_DECEL_O2 RPMX10_TO_CMD(9155)   //  915.5 RPM = 1.73 km/h (= 舊值 2500)
-#define LOGIC_THROTTLE_REV_DECEL_O3 RPMX10_TO_CMD(10986)  // 1098.6 RPM = 2.07 km/h (= 舊值 3000)
-#define LOGIC_THROTTLE_REV_DECEL_O4 RPMX10_TO_CMD(12817)  // 1281.7 RPM = 2.42 km/h (= 舊值 3500)
+// 減速段 (輸出值下降)。同上，是減速率的切換門檻，不是速度限制。
+#define LOGIC_THROTTLE_REV_DECEL_O1 KMHX100_TO_CMD(138)  // 1.38 km/h
+#define LOGIC_THROTTLE_REV_DECEL_O2 KMHX100_TO_CMD(173)  // 1.73 km/h
+#define LOGIC_THROTTLE_REV_DECEL_O3 KMHX100_TO_CMD(207)  // 2.07 km/h
+#define LOGIC_THROTTLE_REV_DECEL_O4 KMHX100_TO_CMD(242)  // 2.42 km/h
 
 // --- Throttle Forward Acceleration Step Time Table Definitions ---
 // Format: {Step, TimeMs}
@@ -131,16 +135,38 @@ typedef enum {
                                                       //
 // 初始化定義最高轉速
 #define THROTTLE_ASSIST_LEVEL_DEFAULT (5)
-// 段位對應的正轉命令上限。索引 0~5，共 THROTTLE_ASSIST_LEVEL_COUNT 筆。
-// 括號內為理論車速 (8 吋輪, 齒比 20.3)；實機頂速約 7.2 km/h，故段位 5 的上限
-// 用不完，多出的約 13% 餘裕是留給負載/爬坡的扭力頭。
+
+// =============================================================================
+//  段位限速表 —— **直接以 km/h 定義**
+// =============================================================================
+//  主機 (LCD) 送來的是**段位編號**而非速度值 (Modbus: u8WheelCfgLo & 0x0F → u8AssistLevel)，
+//  所以每一段對應多少 km/h 完全由本表決定，改本表需重新編譯燒錄。
+//    索引 0     = 電子鎖車 (e-lock)，不是速度 —— 命令歸零且 EMB 不放開，見 s_logic_embraker.h
+//    索引 1~5   = 五個助力段位
+//    索引 6~15  = 主機若送出 (欄位是 4-bit)，s_logic_throttle.c 會夾到 5，見該處邊界檢查
+//
+//  KMHX100_TO_CMD(kx) 的入口單位是 km/h x100 (解析度 0.01 km/h)，換算內含
+//  motor_scale.h 的輪徑 WHEEL_DIAMETER_INCH_X10(8.0 吋) 與齒比 GEAR_RATIO_X100(20.30)。
+//  ⚠ 換輪徑或換齒比 → 本表的 km/h 需重新確認 (數字不必改，但實際車速會跟著變)。
+//
+//  ⚠ 實機頂速約 7.2 km/h (≈10400 count)。段位 5 的 8.3 km/h **到不了**，多出的約 13%
+//    是刻意留給負載/爬坡的扭力頭 —— 也就是任何高於約 7.2 的設定值都等同「不限速」。
+//
+//  [2026-08-14] 兩件事同時改：
+//    (1) 單位由 RPMX10_TO_CMD(機械RPM x10) 改為 KMHX100_TO_CMD(km/h x100)。舊寫法的
+//        RPM 數字 (14648/21973/…) 是為了位元級還原更舊版本硬編碼的 count
+//        (4000/6000/8000/10000/12000) 而反推出來的，可讀性等於零。
+//    (2) **車速依規格重新指定為 3 / 4 / 5 / 6 / 8 km/h**(原 2.76/4.15/5.53/6.91/8.29)。
+//        對應 count：4340 / 5787 / 7239 / 8686 / 11580。
+//        中段變慢較多 (段位 3 由 5.53 → 5.00 km/h，count -9.5%;段位 4 由 6.91 → 6.00，
+//        -13%)，這是刻意的規格變更，不是換算誤差 —— 上車前需確認各段手感符合預期。
 #define THROTTLE_ASSIST_LEVEL_MAX_OUTPUT_VALUES { \
-    0,                       /*         0 RPM = 0.00 km/h (= 舊值 0)     */ \
-    RPMX10_TO_CMD(14648),    /*  1464.8 RPM = 2.76 km/h (= 舊值  4000)  */ \
-    RPMX10_TO_CMD(21973),    /*  2197.3 RPM = 4.15 km/h (= 舊值  6000)  */ \
-    RPMX10_TO_CMD(29297),    /*  2929.7 RPM = 5.53 km/h (= 舊值  8000)  */ \
-    RPMX10_TO_CMD(36621),    /*  3662.1 RPM = 6.91 km/h (= 舊值 10000)  */ \
-    RPMX10_TO_CMD(43945)     /*  4394.5 RPM = 8.29 km/h (= 舊值 12000)  */ \
+    0,                       /* 段位 0：電子鎖車 (不是 0 km/h，是不放開煞車) */ \
+    KMHX100_TO_CMD(300),     /* 段位 1：3.00 km/h */ \
+    KMHX100_TO_CMD(400),     /* 段位 2：4.00 km/h */ \
+    KMHX100_TO_CMD(500),     /* 段位 3：5.00 km/h */ \
+    KMHX100_TO_CMD(600),     /* 段位 4：6.00 km/h */ \
+    KMHX100_TO_CMD(800)      /* 段位 5：8.00 km/h (受硬體限制，實際約 7.2) */ \
 }
 #define THROTTLE_ASSIST_LEVEL_COUNT (6)  // 上表筆數，供 s_logic_throttle.c 做索引邊界檢查
 

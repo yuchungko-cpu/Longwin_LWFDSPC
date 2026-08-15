@@ -93,7 +93,7 @@ typedef enum {
 //     ⇒ **不要為了舒適性而加車速閘門。** 那會讓最後一道保底在最需要它的時候放行。
 //     舒適性要從「讓更早的路徑先接手」解決 —— 那是上面 (5) 下坡滑動偵測的職責
 //     (EMB_DOWNHILL_*,26mm 就攔下,此時動能極小)。本計時只負責「無論如何都要停下來」。
-#define EMBRAKER_LOCK_TIMEOUT_MS 1000
+#define EMBRAKER_LOCK_TIMEOUT_MS 2000
 
 // --- 以下參數目前未作為 EMB 動作條件 (保留定義供參考) ---
 #define EMBRAKER_LOCK_SPEED_KMH_X10 5   // (停用) 舊版低於此車速(km/h×10)則鎖定

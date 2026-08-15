@@ -310,6 +310,11 @@ minimum value accepted */
 //   70 = 122 mm 留了餘裕且實測倒溜量可接受。
 #define EMB_ROLLBACK_REV_EDGES 70        // 淨反向霍爾邊緣門檻 → 立即鎖定。70 = 倒退 122 mm
                                         //   太靈敏(誤鎖)就加大，太遲鈍就縮小；上限見下方護欄
+// [2026-08-15 實測] 30、70、90 三個值手感都一樣 —— 「點放油門」場景下命令會先衰減到
+//   EMB_ROLLBACK_CMD_THRESHOLD 以下(main.c CNRead_Inline 註解:「無有效驅動命令→解除武裝
+//   (無動力倒溜由 WAITING_TO_LOCK 的 Plan B 處理)」)，本門檻根本沒機會生效，實際鎖定的是
+//   s_logic_embraker.c 的 Plan B(單一反向邊緣、無門檻、繞過本參數)。已改回實車驗證過的
+//   70；這個症狀改調下方新增的 EMB_PLANB_DEBOUNCE_EDGES。
 
 // 每輪轉的霍爾邊緣數與 1/4 車輪上限 (由 motor_scale.h 的參數推導，改齒比/極對數會自動跟著變)
 #define EMB_HALL_EDGES_PER_WHEEL_REV ((HALL_EDGES_PER_REV * GEAR_RATIO_X100) / 100)
@@ -317,6 +322,101 @@ minimum value accepted */
 #if (EMB_ROLLBACK_REV_EDGES) > (EMB_ROLLBACK_MAX_EDGES)
 #error "EMB_ROLLBACK_REV_EDGES 超過 1/4 車輪 (91 邊緣) 的倒溜上限規格"
 #endif
+
+// =============================================================================
+//  Plan B (UVW 短路鎖定後、單一反向邊緣搶救) 去抖動 —— 這是「點放油門」症狀真正的旋鈕
+// =============================================================================
+//  Plan B 定義在 s_logic_embraker.c 的 WAITING_TO_LOCK/bReverseEdgeDetected 分支，訊號來自
+//  main.c 的 bEmbReverseEdge = (uGF.UVWLock!=0) && 方向與鎖定前不同。原始行為完全沒有門檻：
+//  UVW 短路鎖定生效、車開始倒溜的**第一個**反向霍爾邊緣就立即鎖死。這正是「點放油門、車
+//  已幾乎停住才倒溜」情境下實際在起作用的鎖定路徑 —— EMB_ROLLBACK_REV_EDGES 管不到它
+//  (該計數器在命令衰減到 EMB_ROLLBACK_CMD_THRESHOLD 以下時已被 CNRead_Inline 解除武裝)。
+//
+//  本門檻讓 Plan B 從「1 個反向邊緣」改成「連續 N 個」才鎖，給 UVW 短路多一點點時間抵抗
+//  重力。**這是實驗性調整**：EM 煞車本身是純數位開關(無漸進力道)，此值只能延後觸發時間
+//  點、不能改變夾下去那一瞬間的力道本身；倒溜位移換算與上方 EMB_ROLLBACK_* 同一套
+//  (1 邊緣 = 1.75 mm)，調大代表允許的倒溜量等量增加。上機實測觀察是否真的比較不頓；
+//  若沒有感覺，代表問題出在煞車機構本身(數位開關無漸進)，不是觸發時機，此路不通。
+//  1 = 還原成原始的「單一邊緣立即鎖定」行為。
+// [2026-08-15 實測] 3 邊緣跟 1 邊緣(原始行為)手感一樣，此路已確認不通 —— 見下方
+//   EMB_ROLLBACK_ASSIST_* 的說明，真正原因是「倒溜開始到鎖定前，馬達完全沒在抵抗」，
+//   不是「鎖太晚」。本巨集保留 (仍在跑，無害)，但不用再花時間調它。
+#define EMB_PLANB_DEBOUNCE_EDGES 3
+
+// =============================================================================
+//  倒溜抑制 (放油門後、車還沒進 UVW 短路前，主動用低扭矩撐住)
+// =============================================================================
+//  背景 (實測排查過程見 main.c 放油門積分器歸零處的註解)：
+//    UVW 短路煞車扭矩∝反電動勢，車速接近零時幾乎沒作用；放油門瞬間速度環積分器又被
+//    刻意歸零(main.c 消 creep 的 fix，見該處註解)，兩者疊加 = 倒溜剛開始的瞬間馬達
+//    幾乎不提供任何阻力，車子接近自由落體式加速，直到 EMB(Plan B/有動力倒溜)追上時
+//    已經有真實速度，夾下去才會這麼硬、甚至頂前輪。EMB_ROLLBACK_REV_EDGES／
+//    EMB_PLANB_DEBOUNCE_EDGES 只能調「滾多遠才鎖」，對「滾的當下沒有阻力」這個根因
+//    無效，這是它們實測沒有效果的原因。
+//
+//  做法：main.c 偵測到「放油門後、車開始往放油門當下的反方向動、且還沒進入 UVW 短路
+//    (uGF.UVWLock==0，此時 FOC 仍在主動控制；一旦短路，三相被動接在一起，無法再下
+//    主動電流命令)」時：
+//      (1) 把速度環輸出上限暫時夾到遠低於正常騎乘電流的低扭矩上限(跟溫控/堵轉保護
+//          算出的上限取小值，不會讓允許電流變得比原本更高)；
+//      (2) 暫時調高積分增益，讓 PI 更快建立撐坡所需的扭矩 —— 平常 SPEEDCNTR_ITERM
+//          刻意調得很慢是為了不讓減速命令的階躍被放大成頓挫 (V0.16 調高全域增益後
+//          引發此問題，V0.19 才補救)；本值只在偵測到倒溜時才臨時套用，不動全域增益，
+//          不會重蹈覆轍。
+//    一旦車真正進入 UVW 短路(車已經很慢)，本機制自動失效，EMB 沿用原本已驗證的
+//    Plan B / 有動力倒溜路徑鎖定 —— 不取代、不繞過那條安全鏈，只是讓它接手時車速
+//    已經比較低。若本機制完全撐不住(坡太陡/電量不足)，車還是會滑到
+//    EMB_ROLLBACK_REV_EDGES(70 邊緣/122mm) 的規格上限被立即鎖死，安全底線不變。
+//
+//  **上機才知道對不對**：撐不住(還是滑到規格上限被硬鎖) → CURRENT_PERCENT 調高；
+//    撐住的動作本身有感(放油門那瞬間感覺頓一下) → CURRENT_PERCENT 調低，或
+//    KI_MULTIPLIER 調低。
+#define EMB_ROLLBACK_ASSIST_CURRENT_PERCENT 20  // RATED_CURRENT_Q15 的百分比，上機從 20 起試
+#define EMB_ROLLBACK_ASSIST_OUTMAX \
+    ((int16_t)(((int32_t)RATED_CURRENT_Q15 * EMB_ROLLBACK_ASSIST_CURRENT_PERCENT) / 100))
+#define EMB_ROLLBACK_ASSIST_KI_MULTIPLIER 4     // 只在偵測到倒溜的當下套用的積分增益倍數
+#define EMB_ROLLBACK_ASSIST_KI (SPEEDCNTR_ITERM * EMB_ROLLBACK_ASSIST_KI_MULTIPLIER)
+
+// [2026-08-15 實測] CURRENT_PERCENT 20→80 手感完全沒差，懷疑本機制根本沒被觸發到：
+//   UVW 短路的進鎖條件 (main.c bUvwStopCommanded) 只要求 ReferenceRAW/qVelRef 歸零
+//   且 HallPulsesLatch 已經很低——「點放」這種本來車速就低的情境，命令一衰減到 0，
+//   HallPulsesLatch 很可能早就已經低於門檻，UVW 短路幾乎在命令歸零的下一拍就進鎖，
+//   常常發生在重力真正把車拉到反向滾動**之前**。本機制的 (uGF.UVWLock==0) 閘門一旦
+//   被關上就再也打不開，於是不管 CURRENT_PERCENT 調多高，程式碼根本沒被跑到。
+//
+//   本參數讓「已符合進鎖條件」這件事需要**連續維持**這麼久才真的進鎖(main.c 的
+//   bUvwStopCommandedStable)，目的是留一點時間讓重力有機會先顯形成方向反轉、
+//   讓上面的倒溜抑制機制來得及接手，而不是命令一歸零就馬上短路、直接把 FOC
+//   主動控制的窗口關死。
+//   ⚠ 安全網不受影響：EMB_ROLLBACK_REV_EDGES(70 邊緣/122mm 硬上限，不看 UVWLock)
+//     與 EMBRAKER_LOCK_TIMEOUT_MS(1 秒保底，不看 UVWLock) 這兩道都獨立運作，最壞情況
+//     的保護跟延遲前完全一樣；本參數只影響「典型情況下哪條路徑先接手」。
+//   ⚠ 這裡動的是 main.c 註解裡明確標記過的雷區(舊版曾因進鎖條件設計不良+debounce
+//     造成「零速 hunting 死結」，車卡在抖動、短路永遠接不上)。新版判準已經比舊版
+//     穩定很多(不再看會抖動的 idq，只看已經很穩定的命令歸零+低脈衝數)，理論上疊加
+//     一個短時間 dwell 不會重蹈覆轍，但**務必實車驗證平路正常停車沒有變得會抖/貼車
+//     感覺變差**，這是本次改動風險最高的回歸點。
+//   上機從 100 起試：撐不住/沒感覺 → 調高(給更多時間)；平路停車開始有感/變抖 → 調低。
+//
+//   [2026-08-15 收回] 100ms 實測倒溜鎖定沒有變軟。懷疑本身就是反效果：dwell 要求
+//   bUvwStopCommanded 連續成立，但倒溜過程車本來就在動，HallPulsesLatch 很可能因此
+//   持續超過 UVW_LOCK_STOP_PULSES → 條件一直不穩定 → dwell 永遠湊不滿 → uGF.UVWLock
+//   可能整段倒溜期間都沒進鎖 → Plan B(需要 UVWLock 生效) 跟著整條失效 → 逼車子只能
+//   一路滑到最晚介入的 EMBRAKER_LOCK_TIMEOUT_MS(1 秒保底，不看車速)才被夾，比 dwell
+//   之前更硬。
+//
+//   [2026-08-15 改版] 後續七輪參數調整(邊緣數/去抖動/主動扭矩/failsafe 時間)全部
+//   實測無效，且改回 0 後手感與最初完全一樣，交叉印證上面的懷疑是對的：問題出在
+//   「連續穩定」這個要求本身，不是數值。改成**固定時窗**，不要求連續：從放油門那一刻
+//   起算(與 g_u8EmbReleaseDir 同一個邊緣)，往後這麼多 ms 內**無條件**不允許 UVW 進鎖，
+//   不管這段期間 HallPulsesLatch 怎麼變化；時間到才恢復原本的即時判斷。
+//   這樣車在這段時間裡不管動不動，UVW 都不會搶著把三相短路、把 FOC 主動控制關掉，
+//   EMB_ROLLBACK_ASSIST 才有真正保證的視窗可以發揮(不會像上一版一樣視窗被自己踩掉)。
+//   ⚠ 安全網不受影響，理由同上一版：EMB_ROLLBACK_REV_EDGES 與 EMBRAKER_LOCK_TIMEOUT_MS
+//     都不看 UVWLock，最壞情況的保護不變。
+//   ⚠ 這次是**每一次放油門**都會延後 UVW 進鎖這麼久(不只倒溜情境)，平地正常停車務必
+//     重新驗證會不會變頓/變抖。上機從 100 起試。
+#define UVW_LOCK_ENTRY_DWELL_MS 100
 
 // 附加閘門：HallPulsesLatch(每 100ms 邊緣數) >= 此值才允許鎖定。**0 = 停用**(預設)。
 //   ⚠ 設為非 0 會重新引入「最低倒溜速度」的限制 (1 pulse/100ms = 0.063 km/h)，
@@ -439,17 +539,15 @@ minimum value accepted */
 //     △ HallPulsesLatch —— 穩定但每 100ms 才更新，3 km/h 時有約 8 cm 的陳舊誤差。
 //     ✓ HallPeriod —— ISR 當下就有的瞬時值。週期與車速成反比，「速度上限」等價於
 //                     「週期下限」，一次無號比較即可，不需除法。
-//   假設 8 吋輪 (周長 638 mm)，與本節「1 邊緣 = 1.75 mm」同一組假設。
+//   輪徑與齒比取自 motor_scale.h (WHEEL_DIAMETER_INCH_X10 = 8.0 吋 → 周長 638 mm、
+//   GEAR_RATIO_X100 = 20.30)，與本節「1 邊緣 = 1.75 mm」同一組假設。
 //   HALL_MIN_PERIOD 若因刻度變更而偏離 434，motor_scale.h 的編譯期護欄會先擋下。
 //   對照表 (實際由下式算出的值，改參數後可用來核對)：
 //     1.5 km/h → 6562      2.5 km/h → 3929
 //     2.0 km/h → 4915      3.0 km/h → 3276
-#define EMB_WHEEL_CIRCUM_MM 638
-#define EMB_KMHX10_TO_HALL_PERIOD(kx)                                             \
+#define EMB_KMHX100_TO_HALL_PERIOD(kx)                                            \
     ((uint16_t)((HALL_MIN_PERIOD * 32768UL) /                                     \
-                RPMX10_TO_CMD((((uint32_t)(kx) * 1000000UL) /                     \
-                               (60UL * EMB_WHEEL_CIRCUM_MM)) *                    \
-                              GEAR_RATIO_X100 / 100UL)))
+                RPMX10_TO_CMD(KMHX100_TO_MOTOR_RPMX10(kx))))
 
 // 允許本偵測夾煞的車速上限 (km/h x10)。**上限之上絕不可能由本偵測夾煞** —— 見上方 (3)。
 //   下限被兩件事夾住：必須高於油門最低命令 0.97 km/h，且要留給陡坡的裕度 ——
@@ -459,14 +557,14 @@ minimum value accepted */
 //   設太低會讓**坡越陡越容易漏鎖** (車先衝過上限才走完位移)，那是保護方向顛倒，
 //   寧可留裕度。3 km/h 對 30% 坡仍有近一倍餘裕。
 //   對照：現況 failsafe 1000ms 在 10% 坡上要到約 3.9 km/h / 60 cm 才夾，本值是嚴格改善。
-#define EMB_DOWNHILL_MAX_SPEED_KMHX10 30
-#define EMB_DOWNHILL_MIN_PERIOD EMB_KMHX10_TO_HALL_PERIOD(EMB_DOWNHILL_MAX_SPEED_KMHX10)
+#define EMB_DOWNHILL_MAX_SPEED_KMHX100 300  // 3.00 km/h
+#define EMB_DOWNHILL_MIN_PERIOD EMB_KMHX100_TO_HALL_PERIOD(EMB_DOWNHILL_MAX_SPEED_KMHX100)
 
-#if (EMB_DOWNHILL_MAX_SPEED_KMHX10) < 15
-#error "EMB_DOWNHILL_MAX_SPEED_KMHX10 低於 1.5 km/h: 未高於油門最低命令(1.04 km/h)的必要裕度, 陡坡必然漏鎖"
+#if (EMB_DOWNHILL_MAX_SPEED_KMHX100) < 150
+#error "EMB_DOWNHILL_MAX_SPEED_KMHX100 低於 1.50 km/h: 未高於油門最低命令(0.97 km/h)的必要裕度, 陡坡必然漏鎖"
 #endif
-#if (EMB_DOWNHILL_MAX_SPEED_KMHX10) > 50
-#error "EMB_DOWNHILL_MAX_SPEED_KMHX10 高於 5 km/h: 帶速硬夾的衝擊與煞車片磨耗不可接受"
+#if (EMB_DOWNHILL_MAX_SPEED_KMHX100) > 500
+#error "EMB_DOWNHILL_MAX_SPEED_KMHX100 高於 5.00 km/h: 帶速硬夾的衝擊與煞車片磨耗不可接受"
 #endif
 
 // 電壓向量限制

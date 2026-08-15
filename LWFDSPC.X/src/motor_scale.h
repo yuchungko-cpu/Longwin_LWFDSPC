@@ -32,6 +32,17 @@
 // 減速齒比 * 100 (馬達轉速 / 車輪轉速)。實測 20.30:1
 #define GEAR_RATIO_X100 2030
 
+// 車輪直徑 (吋 * 10)。8.0 吋 → 周長 638 mm。
+// 這是「編譯期 km/h 換算」的唯一輪徑來源，供 KMHX100_TO_CMD() 與 userparms.h 的
+//   EMB_* 位移／週期門檻使用。s_logic_motor.h 的 LOGIC_MOTOR_DEFAULT_WHEEL_DIMENSION_INCH
+//   直接引用本值，避免「顯示用輪徑」與「限速用輪徑」各寫一份而分歧。
+// ⚠ 換輪徑時，下列以 mm / km/h 表示的門檻**全部**會跟著改變意義，必須重新確認：
+//     userparms.h 的 EMB_ROLLBACK_REV_EDGES(位移)、EMB_DOWNHILL_SLIDE_EDGES(位移)、
+//     EMB_DOWNHILL_MAX_SPEED_KMHX100(車速)、s_logic_throttle.h 的段位限速表。
+// ⚠ 顯示路徑另有執行期可改的輪徑 (logic_motor_setWheelDimension，LCD 可下)；
+//   本值只影響編譯期常數，兩者不同步時「顯示車速」與「實際限速」會對不上。
+#define WHEEL_DIAMETER_INCH_X10 80
+
 // Q15 速度滿刻度 (Speed == 32768 所代表的馬達機械 RPM)。
 // 這是「刻度選擇」而非馬達極限，必須 >= MOTOR_MAX_RPM 並保留超速裕度。
 // 12000 = 2.96 * MOTOR_MAX_RPM，沿用既有刻度以維持原騎乘感 (見檔頭說明)。
@@ -58,6 +69,10 @@
 // 由取整後的 HALL_MIN_PERIOD 回算真正的滿刻度，用於驗證截斷未造成刻度偏移
 #define SPEED_FS_RPM_ACTUAL ((HALL_TIMER_HZ * 60UL) / (HALL_MIN_PERIOD * 1UL * HALL_EDGES_PER_REV))
 
+// 車輪周長 (mm)。直徑(吋x10) x 25.4/10 x pi = 直徑(吋x10) x 7.9796
+//   80 → 638 mm (截尾)。取 79796/10000 使 uint32 中間值最大僅 6.4e6，安全。
+#define WHEEL_CIRCUM_MM ((WHEEL_DIAMETER_INCH_X10 * 79796UL) / 10000UL)
+
 // -----------------------------------------------------------------------------
 //  編譯期護欄
 // -----------------------------------------------------------------------------
@@ -83,6 +98,36 @@
 // 溢位界限：r10 max 120000 時 120000*32768 = 3.93e9 < UINT32_MAX，安全。
 #define RPMX10_TO_CMD(r10) \
     ((uint16_t)(((uint32_t)(r10) * 32768UL + (SPEED_FS_RPM * 10UL) / 2) / (SPEED_FS_RPM * 10UL)))
+
+// -----------------------------------------------------------------------------
+//  車速 (km/h * 100) -> Q15 速度命令 count   ★ 所有「速度設定」統一用這一個
+// -----------------------------------------------------------------------------
+//  入口單位 km/h x 100，即解析度 0.01 km/h：
+//      KMHX100_TO_CMD(300) = 3.00 km/h      KMHX100_TO_CMD(274) = 2.74 km/h
+//
+//  [為何取 x100 而非 x10] 本車量程只有 1~8 km/h，0.1 km/h 在起步速度 (約 1 km/h) 上
+//    就是 10% 的跳動;實車調校出來的值 (0.97 / 1.04 / 2.76 km/h) 在 x10 解析度下**無法
+//    表達**，換算會被迫改掉已驗證的手感。x100 下全部現有值都保得住 (誤差 <= 0.3%)。
+//
+//  [為何不用浮點 (KMH_TO_CMD(3.00))] 浮點常數雖然也在編譯期 fold、不會產生執行期成本，
+//    但 ISO C 不允許浮點出現在「整數常數運算式」—— #if/#elif、陣列大小、case 標籤、
+//    _Static_assert 都不能用。那會讓速度設定失去 #error 範圍護欄 (例如 userparms.h 的
+//    EMB_DOWNHILL_MAX_SPEED 上下界檢查)，代價比多打兩個零高。
+//
+//  ⚠ 換算內含輪徑 (WHEEL_DIAMETER_INCH_X10) 與齒比 (GEAR_RATIO_X100)。
+//    用本巨集寫死的速度值只對該輪徑/齒比成立；換規格必須重新確認全部設定值。
+//
+//  換算鏈 (1 km/h = 1e6 mm/h)：
+//      車輪 RPM x10 = kx * 1e6 / (600 * 周長mm)        8 吋輪(周長 638) → x2.612
+//      馬達 RPM x10 = 車輪 RPM x10 * 齒比               x20.30
+//      count        = 馬達 RPM x10 * 32768 / (SPEED_FS_RPM*10)
+//    合計 1 km/h = 1447.9 count。溢位界限 kx <= 4000 (40 km/h)：中間值全在 uint32 內，
+//    且馬達 RPM x10 <= 120000 仍在 RPMX10_TO_CMD 的安全範圍。本車頂速約 7.2 km/h。
+#define KMHX100_TO_MOTOR_RPMX10(kx)                                             \
+    (((((uint32_t)(kx) * 1000000UL) / (600UL * WHEEL_CIRCUM_MM)) *              \
+      GEAR_RATIO_X100) / 100UL)
+
+#define KMHX100_TO_CMD(kx) RPMX10_TO_CMD(KMHX100_TO_MOTOR_RPMX10(kx))
 
 // Q15 速度 -> 馬達機械 RPM
 static inline int16_t scale_speedToMotorRpm(int16_t i16SpeedQ15) {

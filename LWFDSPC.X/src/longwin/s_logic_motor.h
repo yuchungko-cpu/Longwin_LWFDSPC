@@ -10,7 +10,10 @@
 
 // --- Default Motor Parameter Values ---
 // Based on longwinConrtrolFunction_chunchi.md
-#define LOGIC_MOTOR_DEFAULT_WHEEL_DIMENSION_INCH (80)                     // 預設輪徑 (8.0 吋 * 10)
+// 預設輪徑 (吋 * 10)。直接引用 motor_scale.h 的唯一來源 —— 這是「顯示車速」用的初值
+//   (執行期可由 logic_motor_setWheelDimension 改)，而編譯期的限速換算 (KMHX100_TO_CMD)
+//   用的是同一個值。兩邊各寫一份 80 曾是分歧來源，故改為別名。
+#define LOGIC_MOTOR_DEFAULT_WHEEL_DIMENSION_INCH (WHEEL_DIAMETER_INCH_X10)
 #define LOGIC_MOTOR_DEFAULT_POLE_PAIRS (MOTOR_POLE_PAIRS)                 // 馬達極對數 (實測 3；6 極馬達)
 // [DEPRECATED] 舊版用此欄位隱含代表減速齒比 (610/120 = 5.083，再配合當時 Speed 刻度
 //   偏小 4 倍，合成 ÷20.33 = 真實齒比)。齒比已改由 motor_scale.h 的 GEAR_RATIO_X100
@@ -137,14 +140,13 @@ typedef struct
 #endif
 
 // 起始速度預設值 (起步時直接預載到此值，省掉從 0 爬升的那段)。
-// [實車調校 2026-08-14] 5493 (549.3 RPM = 1.04 km/h) → 5124 (512.4 RPM = 0.97 km/h = 1399
-//   count)，起步較平順。
+// [實車調校 2026-08-14] 1.04 → 0.97 km/h，起步較平順。單位改用 km/h x100 表達。
 //   ⚠ 本值**必須與 LOGIC_THROTTLE_FWD_OUTPUT_MIN 一起改**，單獨改沒有任何效果：
 //     logic_motor_getUpdateParamsFiltered() 的預載路徑在套完本值之後還會套 u16MinRpm 地板
 //     (`if (u16Seed < u16MinRpm) u16Seed = u16MinRpm;`)，且每個 tick 的輸出也有同一道地板;
 //     而 u16MinRpm 由呼叫端傳入 = LOGIC_THROTTLE_FWD_OUTPUT_MIN。兩者不一致時，效果一律由
 //     **較大的那個**決定。同理，油門模組自己也把 TargetRpm 的地板設在該值。
-#define ACCEL_FILTER_START_CMD_DEFAULT RPMX10_TO_CMD(5124)
+#define ACCEL_FILTER_START_CMD_DEFAULT KMHX100_TO_CMD(97)  // 0.97 km/h
 
 // 曲線索引 0~6 對應曲線 1~7 (eAccelCurve A0 = 第 1 組)。
 // R (counts/tick, tick=2ms) → 加速率 / 由起始速度到 8.29 km/h 的到達時間：
@@ -245,34 +247,83 @@ typedef struct
     }
 
 // ============================================================================
-//  反轉專屬濾波參數 (與正轉完全獨立)
+//  反轉專屬濾波曲線 (5 段，與正轉完全獨立)
 // ============================================================================
-//  不做 5 段：反轉上限是固定值 (LOGIC_THROTTLE_REV_OUTPUT_MAX = 4000 counts =
-//  2.76 km/h)、不隨段位變,per-level 曲線沒有意義。
+//  [2026-08-14] 由單一組參數改為 5 段曲線表，做法對齊正轉：加減速各一張表，
+//    段位在程式內固定選定 (不吃 Modbus)。**現行實車測 OK 的設定 = 第 3 段**，
+//    內容位元級不變 (加速 R=8/K=7、減速 R=23/K=4、起始預載同前)。
 //
-//  ⚠ 改動前的實況：濾波呼叫沒有方向閘門,反轉一直在吃**正轉**的加速曲線
-//    (R=8、預載 1500)。後果是反轉 0→2.76 km/h 由原 step/time 表意圖的 5~8 秒
-//    ({1,2}~{3,4}) 變成約 0.63 秒,快了約 8 倍,且一踩就跳到反轉滿速的 38%。
-//    這是加速濾波導入時的連帶效果,先前未被注意。
-//  下列預設值刻意**維持該現況**(R=8/K=7/預載 1500),避免這次改動又動到反轉手感;
-//    若要調回原 step/time 表的 5~8 秒,把 REV_ACCEL_FILTER_RATE 降到 1~2、
-//    REV_ACCEL_FILTER_START_CMD 設 0 即可。
+//  ⚠ 起始預載 5 段**共用同一個值** —— 反轉最終只會固定選一段，per-段的起始速度沒有
+//    意義;而且低於 LOGIC_THROTTLE_REV_OUTPUT_MIN(1.04 km/h) 的預載會被 u16MinRpm 地板
+//    墊回去，等於無效 (見 ACCEL_FILTER_START_CMD_DEFAULT 的說明)。要改反轉起步速度請改
+//    LOGIC_THROTTLE_REV_OUTPUT_MIN，不是改這裡。
+//
+//  ⚠ 加減速共用同一個段位選擇器 (與正轉不同)。正轉之所以拆成兩個
+//    (ACCEL_FILTER_CURVE_SELECT / DECEL_FILTER_CURVE_SELECT)，是因為加速段位有可能改由
+//    LCD 決定，而減速是安全相關行為不能跟著使用者跑;反轉的段位是工程師在程式內定死的，
+//    沒有這個顧慮，一個選擇器少一個出錯機會。若日後真需要拆開，把下方 REV_FILTER_CURVE_
+//    INDEX 分成 accel/decel 兩個即可。
+//
+//  ⚠ 歷史背景：濾波導入初期反轉沒有方向閘門，一直在吃**正轉**的加速曲線，使反轉
+//    0→2.76 km/h 由原 step/time 表意圖的 5~8 秒變成約 0.63 秒 (快 8 倍)。現行第 3 段
+//    就是那個「意外變快但實測可接受」的值;第 1、2 段才接近原 step/time 表的意圖。
 // ============================================================================
-#define REV_ACCEL_FILTER_RATE 8u                                      // 每 tick 遞增 count
-#define REV_ACCEL_FILTER_SHIFT 7u                                     // τ = 256 ms
-// 起始預載。沿用正轉的預設值 (現為 1399 count)，但**反轉的實際預載仍是 1500** ——
-//   LOGIC_THROTTLE_REV_OUTPUT_MIN 維持 5493 未動，u16MinRpm 地板會把它墊回去。
-//   [2026-08-14] 刻意如此：正轉起步的平順化已實車驗證，反轉手感未測，不連帶改動。
-//   若日後要讓反轉一起降，改 LOGIC_THROTTLE_REV_OUTPUT_MIN，不是改這一行。
+#define REV_FILTER_CURVE_COUNT 5u
+
+// 段位選擇 (1~5)。**現行實車驗證值 = 3**，改動需重新編譯燒錄並重測倒退手感。
+#define REV_FILTER_CURVE_SELECT (3u)
+
+#define REV_FILTER_CURVE_INDEX ((uint8_t)((REV_FILTER_CURVE_SELECT) - 1u))
+
+#if ((REV_FILTER_CURVE_SELECT) < 1u) || ((REV_FILTER_CURVE_SELECT) > REV_FILTER_CURVE_COUNT)
+#error "REV_FILTER_CURVE_SELECT 必須是 1~5"
+#endif
+
+// 起始預載 (5 段共用)。沿用正轉的預設值 (0.97 km/h = 1402 count)，但**反轉的實際預載是
+//   1502 count (1.04 km/h)** —— LOGIC_THROTTLE_REV_OUTPUT_MIN 的地板會把它墊上去。
 #define REV_ACCEL_FILTER_START_CMD ACCEL_FILTER_START_CMD_DEFAULT
 
-// 反轉減速：原反轉減速表為 -10~-22 counts/ms,等效 20~44 counts/tick,取中段 32。
-//   4000 counts 全程 250 ms,τ=32 ms 佔 13%。
-// [實車調校 2026-08-10] 32 → 23。反轉獨立減速參數實測效果良好,確定採用此模式。
-//   23 counts/tick = 11.5 counts/ms → 4000 counts 全程 348 ms (原 32 為 250 ms)。
-#define REV_DECEL_FILTER_RATE 23u
-#define REV_DECEL_FILTER_SHIFT 4u
-#define REV_DECEL_FILTER_SNAP DECEL_FILTER_SNAP_TO_ZERO_DEFAULT
+// --- 反轉加速曲線 ---
+// 反轉行程 = 上限 2.76 km/h(3997 count) − 起始 1.04 km/h(1502 count) = 2495 count。
+// R (counts/tick, tick=2ms) → 加速率 / 由起始速度到 2.76 km/h 的到達時間：
+//   段1  R=3   1.03 km/h/s  1.66 s   ← 最緩，接近原 step/time 表的意圖
+//   段2  R=5   1.72 km/h/s  1.00 s
+//   段3  R=8   2.76 km/h/s  0.62 s   ← **現行值，實車測 OK**
+//   段4  R=10  3.45 km/h/s  0.50 s
+//   段5  R=12  4.13 km/h/s  0.42 s   ← 最快，與正轉曲線 7 同一個加速率上限
+// K 隨 R 調整，維持「τ／全程」比例在 26~41% (第 3 段是 41%，即現行手感的基準)。
+//   反轉的比例遠高於正轉的 8%，因為反轉全程只有 0.4~1.7 s 而正轉是 3.2 s;
+//   這是現況延續，不是新的取捨。
+// ⚠ 安全：段 5 的 4.13 km/h/s = 1.15 m/s²，與正轉曲線 7 同級。醫療代步車倒退時
+//   駕駛視野受限，段 4、5 上車前務必實測倒退起步衝擊與可控性。
+#define REV_ACCEL_FILTER_CURVE_TABLE_INIT                                   \
+    {                                                                       \
+        {3, 8, REV_ACCEL_FILTER_START_CMD},   /* 段1 最緩 τ=512ms */        \
+        {5, 7, REV_ACCEL_FILTER_START_CMD},   /* 段2      τ=256ms */        \
+        {8, 7, REV_ACCEL_FILTER_START_CMD},   /* 段3 現行 τ=256ms */        \
+        {10, 6, REV_ACCEL_FILTER_START_CMD},  /* 段4      τ=128ms */        \
+        {12, 6, REV_ACCEL_FILTER_START_CMD},  /* 段5 最快 τ=128ms */        \
+    }
+
+// --- 反轉減速曲線 ---
+// 全程 = 3997 count (2.76 km/h) 降到 0。
+//   段  R    counts/ms  全程     K(τ)       制動距離*  備註
+//   1   12   6          666 ms   5(64ms)    0.26 m     最柔
+//   2   17   8.5        470 ms   5(64ms)    0.18 m
+//   3   23   11.5       348 ms   4(32ms)    0.13 m     ← **現行值，實車測 OK**
+//   4   30   15         266 ms   4(32ms)    0.10 m
+//   5   40   20         200 ms   3(16ms)    0.077 m    最猛
+//   * 制動距離 = ½ x 0.767 m/s x 全程 (理論值，實車會更長)。
+// [實車調校 2026-08-10] 原單一值由 32 → 23，即現在的第 3 段。
+// ⚠ 安全：段 1 的制動距離約為段 3 的 2 倍。倒退時駕駛視野受限，放柔前務必實測制動距離。
+#define REV_DECEL_FILTER_CURVE_TABLE_INIT                                   \
+    {                                                                       \
+        {12, 5, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 段1 最柔 666ms */   \
+        {17, 5, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 段2      470ms */   \
+        {23, 4, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 段3 現行 348ms */   \
+        {30, 4, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 段4      266ms */   \
+        {40, 3, DECEL_FILTER_SNAP_TO_ZERO_DEFAULT},  /* 段5 最猛 200ms */   \
+    }
 
 // --- Merged Function Prototypes ---
 

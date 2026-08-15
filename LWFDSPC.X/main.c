@@ -264,6 +264,24 @@ volatile int16_t g_i16EmbZeroCmdEdgeCnt = 0;
 // ⚠ 與上面兩個計數器同理：只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE
 //   動作處必須清零 (見該處註解)。8-bit 存取在 16-bit MCU 上為原子，不需臨界區。
 volatile uint8_t g_u8EmbNoDecelCnt = 0;
+// [Plan B] UVW 短路鎖定生效前，最後鎖存的行駛方向 (與 uGF.Direction 同編碼)。
+// 20ms 的 EMB 任務在 uGF.UVWLock==0 時持續更新；CNRead_Inline (50us ISR) 讀它來判斷
+// 反向霍爾邊緣是否連續發生，累積 g_u8EmbPlanBRevEdgeCnt。原本是該任務內的區域 static，
+// 移成檔案範圍是為了讓 ISR 也讀得到 —— 更新頻率(20ms)與比對頻率不同步沒關係，因為它
+// 只在「離開 UVW 鎖定」時才變動，鎖定期間本來就固定不變。
+volatile uint8_t g_u8EmbTravelDir = 0;
+// [Plan B 去抖動] UVW 鎖定後，連續反向霍爾邊緣數。CNRead_Inline 每個反向邊緣 +1、
+// 每個正向邊緣或 UVW 未鎖定時歸零 —— 與 g_u8EmbRevEdgeCnt 不同，這是「連續」而非「淨」，
+// 因為 Plan B 要偵測的是「持續倒溜中」，不是位移規格。門檻見 userparms.h 的
+// EMB_PLANB_DEBOUNCE_EDGES。⚠ 只在霍爾邊緣時更新 → 車靜止時凍結，LOCK/RELEASE 動作處
+// 必須清零，理由同 g_u8EmbRevEdgeCnt。
+volatile uint8_t g_u8EmbPlanBRevEdgeCnt = 0;
+// [倒溜抑制] 放油門那一刻(TargetRpm 非0→0邊緣)的行駛方向快照，只在放開的瞬間鎖存一次。
+// 與 g_u8EmbTravelDir 不同 —— 後者在 UVW 未鎖定期間持續更新、追蹤「當下」方向，本值則
+// 凍結在「放開瞬間」，用來判斷放開之後車是否已經反向動起來(倒溜抑制要在 UVW 短路生效
+// 前、FOC 還能主動下電流命令時介入；一旦 UVW 短路，三相被動接在一起，改看
+// g_u8EmbTravelDir 的 Plan B 接手)。詳見 userparms.h 的 EMB_ROLLBACK_ASSIST_*。
+volatile uint8_t g_u8EmbReleaseDir = 0;
 // [e-lock] 助力段位 0 (電子鎖車) 是否作用中。1 = 段位 0，油門已被歸零且 EMB 不會放開。
 // 純觀測用 (X2CScope)，不參與任何控制判斷 —— 控制邏輯各自直接讀 u8AssistLevel。
 volatile uint8_t g_u8ELockActive = 0;
@@ -1393,12 +1411,15 @@ int main(void) {
                 // uGF.Direction 由霍爾狀態序列即時更新(每個邊緣)。UVW 未短路(FOC驅動中)時
                 // 持續鎖存行駛方向；UVW 短路(停車/將停)後，若實際轉向與鎖存方向相反，代表
                 // 車輪被重力拉著倒溜 → 觸發 Plan B 立即鎖定。
-                static unsigned char s_u8EmbTravelDir = 0;
                 if (uGF.UVWLock == 0) {
-                    s_u8EmbTravelDir = uGF.Direction;  // 驅動中持續鎖存行駛方向
+                    g_u8EmbTravelDir = uGF.Direction;  // 驅動中持續鎖存行駛方向
                 }
                 bool bEmbUVWLockActive = (uGF.UVWLock != 0);
-                bool bEmbReverseEdge = bEmbUVWLockActive && (uGF.Direction != s_u8EmbTravelDir);
+                // [Plan B 去抖動] 原本是單一反向邊緣(uGF.Direction != g_u8EmbTravelDir)就觸發；
+                //   改成連續 EMB_PLANB_DEBOUNCE_EDGES 個反向邊緣才觸發，計數由 CNRead_Inline
+                //   (ISR) 累積在 g_u8EmbPlanBRevEdgeCnt。見 userparms.h 該巨集的說明與代價。
+                bool bEmbReverseEdge = bEmbUVWLockActive &&
+                                       (g_u8EmbPlanBRevEdgeCnt >= EMB_PLANB_DEBOUNCE_EDGES);
 
                 // [有動力倒溜/倒衝] 偵測訊號來自 CNRead_Inline 的連續反向霍爾邊緣計數
                 //   (g_u8EmbRevEdgeCnt)。與速度無關 → 再慢的潛行倒溜也會在固定位移內被抓到，
@@ -1490,18 +1511,20 @@ int main(void) {
 #endif
                         O_EM_BRAKE_CTRL_LAT = 0;  // 鎖定 (輸出LOW)
                         g_u8EmbRevEdgeCnt = 0;
-                        // [下坡滑動] 偵測已被執行,位移預算用掉;煞車夾住後車不該再動,
-                        //   兩個計數器一併清零,理由同上方 g_u8EmbRevEdgeCnt。
+                        // [下坡滑動/Plan B] 偵測已被執行,位移預算用掉;煞車夾住後車不該再動,
+                        //   三個計數器一併清零,理由同上方 g_u8EmbRevEdgeCnt。
                         g_i16EmbZeroCmdEdgeCnt = 0;
                         g_u8EmbNoDecelCnt = 0;
+                        g_u8EmbPlanBRevEdgeCnt = 0;
                         break;
                     case EMBRAKER_ACTION_RELEASE:
                         O_EM_BRAKE_CTRL_LAT = 1;  // 釋放 (輸出HI)
                         g_u8EmbRevEdgeCnt = 0;
-                        // [下坡滑動] 每次放煞車都從零起算。ISR 在「命令非零」時本來就會清這
-                        //   兩個計數器,但車被夾住不動時 ISR 完全不執行 → 會凍結在達標值,
-                        //   放開煞車的下一個 20ms tick 就立刻重鎖。理由同 g_u8EmbRevEdgeCnt。
+                        // [下坡滑動/Plan B] 每次放煞車都從零起算。ISR 在「命令非零/UVW未鎖定」
+                        //   時本來就會清這些計數器,但車被夾住不動時 ISR 完全不執行 → 會凍結在
+                        //   達標值,放開煞車的下一個 20ms tick 就立刻重鎖。理由同 g_u8EmbRevEdgeCnt。
                         g_i16EmbZeroCmdEdgeCnt = 0;
+                        g_u8EmbPlanBRevEdgeCnt = 0;
                         g_u8EmbNoDecelCnt = 0;
                         break;
                     case EMBRAKER_ACTION_NONE:
@@ -2157,8 +2180,28 @@ void DoControl(void) {
                 piInputOmega.piState.integrator = 0;  // 速度環:每次放開都清(消前進 creep)
                 // 註:電流環積分器不在此清(有速度放開會造成扭力瞬斷/抖動)。頂牆放開的反向
                 //   驅動改由輸出級「近停放開強制 coast」處理(見下方 bStallReleaseCoast)。
+                g_u8EmbReleaseDir = uGF.Direction;  // [倒溜抑制] 鎖存放開當下的方向快照
             }
             s_bPrevThrottleReleased = bThrottleReleased;
+
+            // --- [倒溜抑制] 放油門後、還沒進 UVW 短路前，車已反向動 → 低扭矩+快積分主動撐住 ---
+            //   完整理由見 userparms.h 的 EMB_ROLLBACK_ASSIST_* 說明。UVW 短路後(uGF.UVWLock!=0)
+            //   三相被動接在一起，FOC 無法再下電流命令，本機制自動失效，改由 Plan B 接手 ——
+            //   兩者不重疊，銜接點就是 UVW 短路生效的瞬間。
+            bool bEmbRollbackAssist = bThrottleReleased &&
+                                      (uGF.UVWLock == 0) &&
+                                      (uGF.Direction != g_u8EmbReleaseDir);
+            if (bEmbRollbackAssist) {
+                if (piInputOmega.piState.outMax > EMB_ROLLBACK_ASSIST_OUTMAX) {
+                    piInputOmega.piState.outMax = EMB_ROLLBACK_ASSIST_OUTMAX;
+                }
+                if (piInputOmega.piState.outMin < -EMB_ROLLBACK_ASSIST_OUTMAX) {
+                    piInputOmega.piState.outMin = -EMB_ROLLBACK_ASSIST_OUTMAX;
+                }
+                piInputOmega.piState.ki = EMB_ROLLBACK_ASSIST_KI;
+            } else {
+                piInputOmega.piState.ki = SPEEDCNTR_ITERM;  // 還原正常增益 (outMax/outMin 每圈都由溫控上限重設，不需還原)
+            }
         }
 
         MC_ControllerPIUpdate_Assembly(piInputOmega.inReference,
@@ -2212,13 +2255,28 @@ void DoControl(void) {
                                  (HallPulsesLatch < UVW_LOCK_STOP_PULSES);
         bool bUvwDriveRequested = (abs(g_stSystemData.i16TargetRpm) >= UVW_LOCK_RELEASE_REF);
 
+        // [2026-08-15 v2] 進鎖抑制窗：固定時窗，不要求連續穩定 (v1 用連續穩定判斷，
+        //   被倒溜本身推高 HallPulsesLatch 自我推翻，已證實無效，見 userparms.h 該巨集
+        //   的說明)。從放油門那一刻起算(獨立鎖存，不依賴其他區塊的邊緣偵測)，往後
+        //   UVW_LOCK_ENTRY_DWELL_MS 內無條件不允許進鎖，不管這段期間 HallPulsesLatch
+        //   怎麼變化；時間到才恢復原本的即時判斷。
+        static bool s_bUvwPrevThrottleReleased = false;
+        static uint32_t s_u32UvwThrottleReleaseMs = 0;
+        bool bUvwThrottleReleased = (g_stSystemData.i16TargetRpm == 0);
+        if (bUvwThrottleReleased && !s_bUvwPrevThrottleReleased) {
+            s_u32UvwThrottleReleaseMs = g_stSystemData.u32TimeMs;
+        }
+        s_bUvwPrevThrottleReleased = bUvwThrottleReleased;
+        bool bUvwLockSuppressedByReleaseWindow = bUvwThrottleReleased &&
+            ((g_stSystemData.u32TimeMs - s_u32UvwThrottleReleaseMs) < UVW_LOCK_ENTRY_DWELL_MS);
+
         if (uGF.UVWLock == 1) {
             // 已鎖定：維持到駕駛重新給出明顯油門(遲滯)
             if (bUvwDriveRequested) {
                 uGF.UVWLock = 0;
             }
-        } else if (bUvwStopCommanded && !bUvwDriveRequested) {
-            // 命令歸零且低速：立即進鎖 (已移除 30ms debounce)
+        } else if (bUvwStopCommanded && !bUvwDriveRequested && !bUvwLockSuppressedByReleaseWindow) {
+            // 命令歸零且低速，且已過放油門後的抑制窗：進鎖
             uGF.UVWLock = 1;
         }
 #else
@@ -2550,10 +2608,38 @@ void DoControl(void) {
         // [A] 頂牆/堵轉放開後,近停且尚未 UVW 短路時,強制 coast(關 PWM)不讓 FOC 主動輸出,
         //   避免「零速→反向」交界的換相把馬達往後主動驅動(runaway 後退 1m+)。UVW lock 一armed
         //   即由下方短路分支接手保持。只在速度模式、油門已放開、且近停時作用 → 不影響有速度時的煞車。
+        //
+        // [實車問題 2026-08-14] 上坡點放油門會先「強烈震動」再滑行 —— 根因是本條件的
+        //   `HallPulsesLatch < UVW_LOCK_STOP_PULSES` **沒有遲滯**,在坡上會形成極限循環:
+        //     近停 → coast 進入(PWM 關,三個積分器清零) → 重力自由拉動車子加速
+        //       → 100ms 後 latch >= 4 → coast 退出(PWM 開) → FOC 以 reference 0 恢復,
+        //         車在倒退故誤差 = 0-(-v) = +v → 正向扭矩把車推回 → latch < 4 → 回到開頭
+        //   HallPulsesLatch 每 100ms 才更新,故這是約 5~10 Hz 的機械振盪;而且每次進 coast
+        //   都清零三個積分器,扭矩與電流都是階躍 → 震動很明顯。
+        //   平路不會發生:車單調減速到停,latch 掉到門檻下就待在那裡,coast 只進一次,
+        //   隨後 UVW lock(同一個門檻)latch 上由三相短路接手。上坡則是重力持續把 latch 推回
+        //   門檻上 → coast 反覆進出,**且 UVW lock 也永遠 latch 不上**,整條停車鏈同時失效。
+        //
+        //   → 改為**閂鎖**:一旦「放油門且近停」成立就維持 coast,直到
+        //     (a) 駕駛重新給油門 → 解閂,恢復正常驅動;或
+        //     (b) UVW lock latch 上 → 由下方三相短路分支接手(本旗標被 UVWLock==0 遮蔽);或
+        //     (c) EMB 夾住 → 車不再動,由機械煞車保持。
+        //   閂鎖後 PWM 不再開關,震動消失;車自由滑行的霍爾週期單調縮短,反而讓下坡/倒溜
+        //   偵測(EMB_DOWNHILL_*)更快更確定地在 26mm 處夾住 EMB。原本要防的「零速↔反向換相
+        //   往後驅動」保護不但保留,還維持得更久。
+        //   ⚠ 代價:震動期間 FOC 原有的間歇制動作用消失,倒溜會略快一點 —— 但 EMB 會在
+        //     26mm 處接手,總倒溜量仍遠小於改動前(靠 1s failsafe 時約 50cm)。
+        static bool s_bCoastLatched = false;
+        if (g_stSystemData.i16TargetRpm != 0) {
+            s_bCoastLatched = false;  // (a) 重新給油門 → 解閂
+        } else if ((uGF.UVWLock == 0) &&
+                   (HallPulsesLatch < UVW_LOCK_STOP_PULSES)) {
+            s_bCoastLatched = true;   // 放油門且近停 → 進閂 (之後不再看 latch)
+        }
         bool bStallReleaseCoast = (uGF.CtrlMode == 0) &&
                                   (g_stSystemData.i16TargetRpm == 0) &&
                                   (uGF.UVWLock == 0) &&
-                                  (HallPulsesLatch < UVW_LOCK_STOP_PULSES);
+                                  s_bCoastLatched;
 #if CODESW_BATTERY_PROTECTION_MODULE_ENABLE
         // 使用 s_logic_battery 模組的輸出禁制旗標來決定是否關閉 PWM
         if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast || logic_battery_shouldProhibitOutput()) {
@@ -2962,6 +3048,19 @@ void DoControl(void) {
                     // 無有效驅動命令 → 解除武裝 (無動力倒溜由 WAITING_TO_LOCK 的 Plan B 處理)
                     g_u8EmbRevEdgeCnt = 0;
                 }
+            }
+
+            // --- [Plan B 去抖動] UVW 短路鎖定後，連續反向霍爾邊緣計數 ---
+            //   與上面 g_u8EmbRevEdgeCnt 不同：不看命令方向(Plan B 本來就是「無命令」情境下的
+            //   搶救)，只看「是否還在 UVW 鎖定中」與「這個邊緣的滾動方向是否偏離鎖定前的行駛
+            //   方向」。連續才累加，一旦方向轉回或離開 UVW 鎖定就歸零 —— 偵測的是「持續倒溜」
+            //   而非淨位移，門檻見 userparms.h 的 EMB_PLANB_DEBOUNCE_EDGES。
+            if ((uGF.UVWLock != 0) && (uGF.Direction != g_u8EmbTravelDir)) {
+                if (g_u8EmbPlanBRevEdgeCnt < 255u) {
+                    g_u8EmbPlanBRevEdgeCnt++;
+                }
+            } else {
+                g_u8EmbPlanBRevEdgeCnt = 0;
             }
 
             // --- [下坡滑動] 命令歸零後的「淨」位移計數 (帶號，供 EMB 立即鎖定) ---
