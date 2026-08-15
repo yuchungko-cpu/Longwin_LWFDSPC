@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工作日誌 2026-08-15 — 上坡點放倒溜煞車調查</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif; background:var(--bg); color:var(--fg); line-height:1.6; }
+  .wrap { max-width:1100px; margin:0 auto; padding:28px 18px 60px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:15px 19px 18px; margin:0 0 16px; }
+  h2 { font-size:1.1rem; margin:0 0 9px; }
+  h2 .n { display:inline-block; width:25px; height:25px; line-height:25px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.86rem;
+          margin-right:8px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,monospace; font-size:.84em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:7px 0; font-size:.86rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.83rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.8rem; color:#ffd580; }
+  td.result { text-align:center; font-weight:700; white-space:nowrap; }
+  td.result.neg { color:#ff9d96; }
+  td.result.pending { color:#ffd23f; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:9px 13px; border-radius:6px; margin:9px 0; font-size:.87rem; }
+  .note { background:rgba(210,153,34,.08); border-left:4px solid var(--warn);
+          padding:9px 13px; border-radius:6px; margin:9px 0; font-size:.87rem; }
+  .bad { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+         padding:9px 13px; border-radius:6px; margin:9px 0; font-size:.87rem; }
+  .foot { color:var(--muted); font-size:.78rem; text-align:center; margin-top:26px; }
+  ol,ul { margin:6px 0; padding-left:22px; }
+  li { margin:4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>工作日誌 — 2026-08-15：上坡點放倒溜煞車調查</h1>
+  <p class="sub">LWFDSPC 主控制器 &nbsp;|&nbsp; 分支 <code>v0.21-downhill-slide-nodecel</code>，commit <code>40e1f11</code>
+    &nbsp;|&nbsp; <b>本次調查未解決根本問題</b>，本檔案記錄已排除的方向與下一步</p>
+
+  <div class="bad"><b>結論先講：</b>今天測試的六種調整全部「實測無感」。倒溜鎖定太硬的根本原因<b>仍未確認</b>。
+    下一步方向已經想好（PWM 軟啟動夾煞，見第 4 節），但因工具錯誤沒有寫進 commit，需要重新實作。</p>
+
+  <!-- 1 -->
+  <div class="card">
+    <h2><span class="n">1</span>症狀</h2>
+    <p style="margin:4px 0">上坡點放油門（輕點加速器又立刻放開），車開始倒溜，EMB 電磁煞車鎖定時力道明顯過硬，
+      甚至觀察到<b>前輪微微抬起</b>（慣性瞬間歸零的跡象）。</p>
+    <p style="margin:4px 0">對照組：<b>平地正常放油門停車很順</b>，不會有這個現象——這排除了「EM 煞車機構本身
+      天生粗暴」的可能，代表煞車在真正接近零速時可以夾得很柔和；問題出在倒溜情境下鎖定當下車速不是真的接近零。</p>
+  </div>
+
+  <!-- 2 -->
+  <div class="card">
+    <h2><span class="n">2</span>已排除的方向（六項調整，實測皆無感）</h2>
+    <table>
+      <tr><th style="width:210px">調整項目</th><th style="width:120px">測試值</th><th style="width:90px">結果</th><th>後續判讀</th></tr>
+      <tr><td class="f">EMB_ROLLBACK_REV_EDGES</td><td class="c">30 / 70 / 90</td>
+        <td class="result neg">無感</td>
+        <td>此計數器需要 <code>|inReference| &gt; EMB_ROLLBACK_CMD_THRESHOLD</code> 才會武裝；「點放」情境命令
+          很快衰減到門檻以下，該計數器實際上從未真正參與鎖定判斷。已改回實車驗證過的 70。</td></tr>
+      <tr><td class="f">EMB_PLANB_DEBOUNCE_EDGES</td><td class="c">1 → 3</td>
+        <td class="result neg">無感</td>
+        <td>Plan B（UVW 短路生效後單一反向邊緣立即鎖定）改成需連續 3 個邊緣。位移級距太小
+          （不到 1cm），對倒溜當下的實際車速影響可忽略。</td></tr>
+      <tr><td class="f">EMB_ROLLBACK_ASSIST_CURRENT_PERCENT<br>+ KI_MULTIPLIER</td><td class="c">20% → 80%<br>4x Ki</td>
+        <td class="result neg">無感</td>
+        <td>放油門後、UVW 短路生效前，主動用低扭矩+加快積分撐住車身。懷疑觸發窗口
+          <code>uGF.UVWLock==0</code> 在「點放」這種本來車速就低的情境下，命令一衰減到 0
+          UVW 短路幾乎立即進鎖，主動撐力的程式碼根本沒被執行到。</td></tr>
+      <tr><td class="f">UVW_LOCK_ENTRY_DWELL_MS（v1：連續穩定判斷）</td><td class="c">100ms</td>
+        <td class="result neg">無感/疑似反效果</td>
+        <td>要求「已符合進鎖條件」連續成立才進鎖。但倒溜本身會讓 <code>HallPulsesLatch</code> 升高、
+          持續打破「穩定」條件 → dwell 可能永遠湊不滿 → UVW 短路（及依賴它的 Plan B）整個沒進鎖，
+          逼車子改靠最晚介入的 failsafe。已改版（v2，見下方）。</td></tr>
+      <tr><td class="f">UVW_LOCK_ENTRY_DWELL_MS（v2：固定時窗）</td><td class="c">100ms</td>
+        <td class="result pending">尚待驗證</td>
+        <td>改成從放油門那一刻起算固定時窗、不要求連續穩定，修正 v1 的自我矛盾設計。
+          <b>這一版還沒上機測試就轉向處理 git 分支，是本次調查中唯一沒跑完的實驗。</b></td></tr>
+      <tr><td class="f">EMBRAKER_LOCK_TIMEOUT_MS</td><td class="c">1000 → 600</td>
+        <td class="result neg">無感</td>
+        <td>不看車速、時間到就夾的最後保底 failsafe。連這個「無條件」的最後防線都調了沒差，
+          是促成「六輪全部無感」這個結論的關鍵證據——某個環節的假設本身可能有問題，不只是數值沒調對。
+          <span style="color:var(--muted)">（收工時檔案內留在 2000，可能是過程中進一步試驗留下的狀態，
+          非本次調查的正式結論值。）</span></td></tr>
+    </table>
+    <div class="note"><b>六輪「大改、零效果」帶出的推論：</b>凡是只調「什麼時候鎖」的參數都沒用，
+      暗示鎖定當下的車速可能在很短時間內就已經到達某個「終端速度」（重力拉力與 UVW 被動煞車力矩打平
+      的平衡點），使得在此之後鎖定時機的先後對車速影響很小。這個推論尚未證實，見第 3 節。</div>
+  </div>
+
+  <!-- 3 -->
+  <div class="card">
+    <h2><span class="n">3</span>沒有直接證實、但影響判斷方向的關鍵發現</h2>
+    <ul>
+      <li><b>放油門瞬間積分器被清零：</b><code>main.c</code> 消除平路 creep 的既有 fix 會在放油門邊緣把速度環
+        積分器歸零。上坡點放的當下，這正好是重力最需要有撐坡扭力的時刻，卻被歸零，且積分項刻意調得很慢
+        （<code>SPEEDCNTR_ITERM=20</code>，V0.16→V0.19 曾因調快而引發別的頓挫問題，不能隨便再調快全域值）。</li>
+      <li><b>UVW 短路在低速幾乎無扭矩：</b>被動三相短路的煞車扭矩正比於反電動勢／轉速，車速接近零時幾乎不提供阻力，
+        這是本次多項假設共同的物理基礎，但「終端速度多快能達到」、「達到的時間有多短」都沒有實測數據佐證，
+        全靠代碼推理與使用者的主觀描述交叉比對。</li>
+      <li><b>沒有任何形式的即時觀測手段：</b>X2CScope 在本專案不可用；今天多次提議用現有 LED 燈號做最小
+        二元診斷（例如鎖定後亮燈 2 秒區分「正常路徑鎖」or「failsafe 鎖」），使用者兩次都選擇繼續盲猜、
+        不加診斷。這是今天六輪調整都無法交叉驗證「改動有沒有真的被執行到」的根本限制，也是進度慢的主因。</li>
+    </ul>
+  </div>
+
+  <!-- 4 -->
+  <div class="card">
+    <h2><span class="n">4</span>下一步（已設計、尚未實作）</h2>
+    <p style="margin:4px 0 8px">六輪「調時機」全部無效後，改變方向：直接軟化 <b>EM 煞車嚙合力本身</b>，
+      而不是繼續調「什麼時候鎖」。</p>
+    <table>
+      <tr><th style="width:230px">項目</th><th>內容</th></tr>
+      <tr><td>構想</td><td>OEMB（RD1）目前是純數位開關（LAT=0 全鎖／LAT=1 全鬆），鎖下去的力道完全沒有漸進。
+        改用軟體 PWM 讓佔空比在一段時間內從低漸進爬升到 100%，類似 ABS 的概念：不阻止鎖定發生，
+        而是讓平均嚙合力緩升，不要一次到底。</td></tr>
+      <tr><td>硬體確認</td><td>已向使用者確認 OEMB 後級驅動電路是<b>電晶體/MOSFET + 飛輪二極體</b>固態驅動，
+        可以承受這種頻率的切換（若是繼電器則完全不能做這件事）。</td></tr>
+      <tr class="hi"><td>安全設計（已想清楚，尚未寫入 code）</td>
+        <td>故障狀態(A04)、<code>bMotorStop</code>（電池/溫度保護強制停車）、IBKS 手煞車/充電中訊號，
+          這三種<b>緊急/保護性</b>鎖定必須維持瞬間全鎖，<u>不能</u>套用軟啟動——失效保護不能為了舒適
+          而猶豫。只有 Plan B／有動力倒溜／下坡滑動／UVW 正常延遲鎖這些「正常判斷該停」的情況才軟啟動。</td></tr>
+      <tr><td>已知的實作坑</td>
+        <td><code>logic_embraker_update()</code> 對「持續鎖定」情境只在剛轉入 <code>EMBRAKER_STATE_LOCKED</code>
+          那個 tick 回報一次 <code>EMBRAKER_ACTION_LOCK</code>（有動力倒溜閂鎖的情況除外，那個會每 tick
+          重複回報）。若把軟啟動邏輯直接掛在 <code>switch(eBrakeAction)</code> 的 LOCK 分支下，一般停車的
+          軟啟動會在第一個 tick 之後被凍結在半途、永遠爬不完——必須改成獨立於 switch、每 tick 都檢查
+          <code>logic_embraker_getStatus()==EMBRAKER_STATE_LOCKED</code> 來驅動爬升，不能依賴
+          <code>eBrakeAction</code> 是否重複。</td></tr>
+      <tr><td>未知風險</td>
+        <td>換相頻率被呼叫本模組的任務週期限制在數十 Hz 等級，遠低於一般 PWM。電磁鐵/彈簧機構的實際機械
+          響應時間未知——若機構夠快，平均力道會漸進；若跟不上，可能變成「喀喀喀」的顫動/異音，
+          比原本瞬間全鎖更不舒服。<b>這件事只能上車聽/摸出來，此刻無法用推理決定參數。</b></td></tr>
+      <tr><td>目前狀態</td>
+        <td>參數設計（<code>EMB_SOFTLOCK_ENABLE</code>／<code>_RAMP_MS</code>／<code>_MIN_DUTY_PERCENT</code>）
+          與 main.c 的整合邏輯已經想清楚，但寫入 <code>s_logic_embraker.h</code> 的編輯在對話中因工具連線
+          問題中斷，<b>沒有成功寫入、也沒有進入今天的 commit</b>。下次接手時需要重新從頭實作，
+          不是「已完成待測」的狀態。</td></tr>
+    </table>
+  </div>
+
+  <!-- 5 -->
+  <div class="card">
+    <h2><span class="n">5</span>給下一個人（或下一次對話）的備忘</h2>
+    <ol>
+      <li>先把第 2 節「UVW_LOCK_ENTRY_DWELL_MS v2」實車測完，這是唯一設計完成但沒測到的項目——它本身
+        獨立於軟啟動，如果實測還是無感，能進一步縮小「到底是不是 UVW 進鎖時機」這個假設的可信度。</li>
+      <li>強烈建議在動手做軟啟動之前，至少加一次最小的觀測手段（哪怕只是本檔案第 3 節提過的 LED
+        二元訊號）。六輪調整全部無感、卻沒有任何一次能確認「改動真的被執行到」，效率損耗很大，
+        軟啟動這種涉及硬體切換行為的改動更不該在完全沒有回饋的狀況下反覆猜測參數。</li>
+      <li>本檔案對應的實作內容在分支 <code>v0.21-downhill-slide-nodecel</code>（commit <code>40e1f11</code>），
+        本檔案本身放在 <code>LW_Jeff</code> 分支，兩邊刻意不合併，回去改代碼時記得切回前者。</li>
+    </ol>
+  </div>
+
+  <p class="foot">LWFDSPC · 上坡點放倒溜煞車調查工作日誌 · 2026-08-15 · 本次調查未解決根本問題，僅記錄排除過程</p>
+</div>
+</body>
+</html>
