@@ -1286,3 +1286,115 @@ void InitPWMGenerator3 (void)
     PG3TRIGC     = 0x0000;
 
 }
+
+// *****************************************************************************
+// *****************************************************************************
+//  EMB PWM (SCCP2 in Dual-Edge Buffered PWM mode) — 完整 API 說明見 pwm.h
+// *****************************************************************************
+// *****************************************************************************
+
+// Ramp 狀態。Q16 累加器演算法:每 tick 一次 32-bit 減法 + 位移,無乘法/除法。
+//   演進歷史:
+//   (1) 最早用「每 tick 累減固定 step」(step = initial/N),整數除法殘留造成 ramp 尾端
+//       多一個 1-count 的看不見步,實測設 120ms 只量到 100ms。
+//   (2) 改用「直接公式 duty(k) = initial * (N-k) / N」,末端剛好落 0 但每 tick 一次
+//       32/16 除法 (~18 cycle)。功能正確。
+//   (3) 現行版:Q16 累加器。setup 時一次 32/16 除法算 step_q16,tick 內 acc -= step_q16、
+//       duty = acc >> 16 (取高 16-bit,等同無成本)。與 (2) 的輸出 duty 差 ≤1 count
+//       (累積捨入),末端由 TicksLeft 到 0 時 forced 為 0。
+//   N = TicksLeft 起始值,包含 startSoftClamp 那個 iteration 消耗的第一個 tick,
+//   讓 duty 從 initial 遞減到 0 剛好 = 使用者設定的 tick 數 × 20ms。
+static uint16_t s_u16EmbPwmDuty        = 0u;  // 目前 duty (0 = 鎖住、EMB_PWM_PERIOD = 全開)
+static uint32_t s_u32EmbPwmAccQ16      = 0u;  // Q16 累加器 (duty << 16)
+static uint32_t s_u32EmbPwmStepQ16     = 0u;  // Q16 每 tick 遞減量
+static uint16_t s_u16EmbPwmTicksLeft   = 0u;  // 剩餘 tick 數,0 = 無 ramp 進行中
+
+/**
+ * 初始化 SCCP2 為 20 kHz PWM,duty=0(鎖住 = 安全預設)。
+ * 暫存器設定值取自 MCC 產出(dsPIC33CK256MP506_mcc.X),僅 CCP2PRL 由 200(500 kHz)
+ * 改為 4999(20 kHz)。PPS 映射(RP65 → OCM2) 在 port_config 內設定。
+ */
+void emb_pwm_init(void) {
+    // MOD 0x5 = Dual Edge Compare Buffered PWM; CCSEL=0; TMR32 16-bit;
+    // TMRPS 1:1; CLKSEL FCY (FOSC/2 = 100 MHz); TMRSYNC/CCPSLP/CCPSIDL/CCPON = 0
+    CCP2CON1L = 0x0005u;
+    // SYNC None; ALTSYNC/ONESHOT/TRIGEN/RTRGEN 全 0; IOPS 每個週期匹配都輸出
+    CCP2CON1H = 0x0000u;
+    // ASDG 0; PWMRSEN 0
+    CCP2CON2L = 0x0000u;
+    // OCAEN 1 → 啟用 OCM 輸出到 pin(這是 PWM 出得來的關鍵)
+    CCP2CON2H = 0x0100u;
+    // PSSACE Tri-state on shutdown; POLACE = 0(不反相)
+    CCP2CON3H = 0x0000u;
+
+    CCP2TMRL = 0x0000u;
+    CCP2TMRH = 0x0000u;
+    // 週期 = 4999 → 20 kHz @ FCY 100 MHz
+    CCP2PRL  = EMB_PWM_PERIOD;
+    CCP2PRH  = 0x0000u;
+    // Duty:CCP2RA = rise edge count(始終 0)、CCP2RB = fall edge count(= on-time)
+    CCP2RA   = 0x0000u;
+    CCP2RB   = 0x0000u;             // 起始 duty 0 → EMB 鎖住(安全)
+    CCP2BUFL = 0x0000u;
+    CCP2BUFH = 0x0000u;
+
+    s_u16EmbPwmDuty      = 0u;
+    s_u16EmbPwmTicksLeft = 0u;
+
+    // 啟動模組
+    CCP2CON1Lbits.CCPON = 1u;
+}
+
+void emb_pwm_hardRelease(void) {
+    CCP2RB = EMB_PWM_PERIOD;
+    s_u16EmbPwmDuty      = EMB_PWM_PERIOD;
+    s_u16EmbPwmTicksLeft = 0u;         // 停止任何進行中的 ramp
+}
+
+void emb_pwm_hardLock(void) {
+    CCP2RB = 0u;
+    s_u16EmbPwmDuty      = 0u;
+    s_u16EmbPwmTicksLeft = 0u;
+}
+
+/**
+ * 從目前 duty 線性遞減到 0,共 u16Ticks 個 20ms tick 完成。
+ * u16Ticks = 0 → 立即硬鎖(等同 hardLock);ticks=6 代表 120ms 完成。
+ * 已在 ramp 中重複呼叫:以目前 duty 為新起點、u16Ticks 為新的總 tick 數。
+ *
+ * [實測校正 2026-08-17] TotalTk = ticks + 1:
+ *   startSoftClamp 呼叫後,main.c 在同一個 20ms iteration 內立刻呼叫 tick20ms → 第一次
+ *   遞減發生在同一 tick,若不補 +1 會少一格,實測設 6 只量到 5 tick。加 1 之後
+ *   duty 由 initial → 0 的總經過時間 = ticks × 20ms 剛好。
+ *
+ * setup 成本:一次 32/16 除法 (~18 cycle),每次 LOCK 事件才做一次。
+ */
+void emb_pwm_startSoftClamp(uint16_t u16Ticks) {
+    if ((u16Ticks == 0u) || (s_u16EmbPwmDuty == 0u)) {
+        emb_pwm_hardLock();
+        return;
+    }
+    uint16_t u16TotalTk = u16Ticks + 1u;
+    s_u32EmbPwmAccQ16   = (uint32_t)s_u16EmbPwmDuty << 16;
+    s_u32EmbPwmStepQ16  = s_u32EmbPwmAccQ16 / (uint32_t)u16TotalTk;
+    s_u16EmbPwmTicksLeft = u16TotalTk;
+}
+
+/**
+ * 每 20ms 呼叫一次,推進 ramp。ramp 未啟動時 no-op。
+ * 掛在既有的 20ms EMB 任務(main.c 現有的 EMB tick 呼叫點)。
+ *
+ * 每 tick 成本:一次 32-bit 減法 + 取高 16-bit (dsPIC33 上 ~5~8 cycle)。無乘法/除法。
+ * 末端由 TicksLeft 歸零時 forced duty=0,保證 ramp 剛好落在 0(不受累加器捨入影響)。
+ */
+void emb_pwm_tick20ms(void) {
+    if (s_u16EmbPwmTicksLeft == 0u) return;
+    s_u16EmbPwmTicksLeft--;
+    if (s_u16EmbPwmTicksLeft == 0u) {
+        s_u16EmbPwmDuty = 0u;              // ramp 結束,強制歸零(消殘留)
+    } else {
+        s_u32EmbPwmAccQ16 -= s_u32EmbPwmStepQ16;
+        s_u16EmbPwmDuty = (uint16_t)(s_u32EmbPwmAccQ16 >> 16);
+    }
+    CCP2RB = s_u16EmbPwmDuty;
+}

@@ -119,12 +119,53 @@
 #define ADC_SAMPLING_POINT      0x0000
 
 #define MIN_DUTY            0x0000
+
+// *****************************************************************************
+//  EMB (Electromagnetic Brake) PWM driver — SCCP2 → OCM2 → RP65 → RD1 (OEMB)
+// *****************************************************************************
+//  取代原本的數位 O_EM_BRAKE_CTRL_LAT。目的:讓 EMB 由「瞬間夾死」變成「可漸降通電」,
+//  在停車鎖煞的瞬間削減衝擊(客戶回報下坡與上坡點放時 EMB 一次鎖住會有大震動)。
+//
+//  硬體:MCU RD1 → R89(330) → Q9(dual-NPN level-shift) → R91(330) → Q10(high-side FET) → EMB
+//    邏輯:RD1 高 = EMB 通電 = 釋放;RD1 低 = EMB 斷電 = 鎖住(彈簧夾)。
+//    續流保護:EMB 線圈已內建 diode(客戶確認),PWM 切換安全。
+//    ⚠ Fail-safe 提醒:電路圖上 OEMB 沒看到明確的下拉電阻。MCU reset 時 pin 高阻抗,
+//      Q9 base 靠漏電決定 → 行為不定。建議硬體加 10~100k 下拉(OEMB 到 GND)。
+//      port_config 內另有啟用 CN 內部下拉作為軟體 fail-safe (見該處)。
+//
+//  參數:
+//    PWM 頻率     20 kHz  (避開音頻;Q9/Q10 切換損耗低)
+//    Period 值    EMB_PWM_PERIOD = 4999 (0~4999 共 5000 級,解析度 0.02%)
+//    Duty 值      0 = 硬鎖  /  EMB_PWM_PERIOD = 全開釋放
+//
+//  API 語意:
+//    emb_pwm_init()               → 初始化 SCCP2,duty=0(安全)
+//    emb_pwm_hardRelease()        → duty=EMB_PWM_PERIOD,立即釋放
+//    emb_pwm_hardLock()           → duty=0,立即鎖住(緊急路徑用)
+//    emb_pwm_startSoftClamp(ticks)→ 從當前 duty 線性遞減到 0,共 ticks 個 20ms tick。
+//                                   ticks=0 等於 hardLock;ticks=6 代表 120ms 完成。
+//    emb_pwm_tick20ms()           → 每 20ms 呼叫一次,推進 ramp
+//
+//  [為何入口單位用 tick 而非 ms] EMB tick 本來就是 20ms,「ms 進 → 除以 20」等於在 API
+//    邊界隱藏一次整數除法,而且會誤導讀者以為可以精細到 ms。改用 tick 後粒度顯性、
+//    也省一次除法(每次 LOCK 事件節省 ~18 週期,微不足道但無代價可拿)。
+//
+//  緊急路徑(IBKS/bMotorStop) 走 emb_pwm_hardLock();其餘 LOCK 動作走 startSoftClamp。
+// *****************************************************************************
+#define EMB_PWM_PERIOD  4999u   // 100 MHz / (4999+1) = 20 kHz
+
+void emb_pwm_init(void);
+void emb_pwm_hardRelease(void);
+void emb_pwm_hardLock(void);
+void emb_pwm_startSoftClamp(uint16_t u16Ticks);
+void emb_pwm_tick20ms(void);
+
 // *****************************************************************************
 // *****************************************************************************
 // Section: Interface Routines
 // *****************************************************************************
 // *****************************************************************************
-void InitPWMGenerators(void);        
+void InitPWMGenerators(void);
 // *****************************************************************************
 #ifdef __cplusplus  // Provide C++ Compatibility
     }

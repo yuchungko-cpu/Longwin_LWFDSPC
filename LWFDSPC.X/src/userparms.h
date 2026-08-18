@@ -305,15 +305,27 @@ minimum value accepted */
 //      N=3  →   5.2 mm (1/122 輪)      N=16 →  28.0 mm (1/23 輪)
 //      N=4  →   7.0 mm (1/91  輪)      N=45 →  78.6 mm (1/8  輪)
 //      N=8  →  14.0 mm (1/46  輪)      N=91 → 159.0 mm (1/4  輪 ← 規格上限)
-#define EMB_ROLLBACK_CMD_THRESHOLD 100  // |inReference| 需 > 此值才啟用偵測；100 = 36.6 馬達RPM = 0.069 km/h
+// [2026-08-15 停用] 倒溜偵測改用「排檔方向 + EMB 曾 RELEASE」武裝，不再看命令方向。
+//   保留定義以防日後回退,但無 live 消費者(main.c 已改讀 uGF.DirSW)。
+#define EMB_ROLLBACK_CMD_THRESHOLD 100  // (停用) 舊版:|inReference| > 此值才啟用偵測
 // [實車調校 2026-08-10] 90 → 70。90(157 mm) 貼著 1/4 車輪護欄 91(159 mm) 太近,
 //   70 = 122 mm 留了餘裕且實測倒溜量可接受。
-#define EMB_ROLLBACK_REV_EDGES 70        // 淨反向霍爾邊緣門檻 → 立即鎖定。70 = 倒退 122 mm
+// [2026-08-15] 70 → 16 (122 mm → 28 mm)。因客戶回報「上坡下滑 EMB 上鎖時前輪翹起」，
+//   夾煞時峰值減速度 ∝ 動能 ∝ 觸發位移，門檻降低直接減小翹前輪風險。
+//   舊值 70 之所以較大，是因為當時武裝條件是「命令 > 100 count」，命令降到 100 以下
+//   會突然解除武裝並清零計數，需要留位移餘裕避免競賽窗口失效 → 得取離規格護欄 (91)
+//   較近的值。改用「排檔方向 + EMB 曾 RELEASE」武裝後 (見 main.c 的說明)，整段都在
+//   武裝，不再有解武裝的競賽，可以取更小的門檻。
+//   16 邊緣的量級與 V0.21 沒減速偵測的 26 mm 相當，兩條路徑覆蓋同一保護範圍。
+//   相對規格護欄 91 (159 mm) 有 5.7 倍餘裕。若實測誤觸再退回 24 (42 mm)。
+#define EMB_ROLLBACK_REV_EDGES 16        // 淨反向霍爾邊緣門檻 → 立即鎖定。16 = 倒退 28 mm
                                         //   太靈敏(誤鎖)就加大，太遲鈍就縮小；上限見下方護欄
 
 // 每輪轉的霍爾邊緣數與 1/4 車輪上限 (由 motor_scale.h 的參數推導，改齒比/極對數會自動跟著變)
-#define EMB_HALL_EDGES_PER_WHEEL_REV ((HALL_EDGES_PER_REV * GEAR_RATIO_X100) / 100)
-#define EMB_ROLLBACK_MAX_EDGES (EMB_HALL_EDGES_PER_WHEEL_REV / 4)
+//   ⚠ 1UL 必須放在最前面:18 * 2030 = 36540 溢位 16-bit int,而 C 的左結合律讓
+//     "18 * 2030 * 1UL" 仍先做 int 乘法。預處理器 #if 用 long 運算不溢位,但執行期會踩雷。
+#define EMB_HALL_EDGES_PER_WHEEL_REV ((1UL * HALL_EDGES_PER_REV * GEAR_RATIO_X100) / 100UL)
+#define EMB_ROLLBACK_MAX_EDGES (EMB_HALL_EDGES_PER_WHEEL_REV / 4UL)
 #if (EMB_ROLLBACK_REV_EDGES) > (EMB_ROLLBACK_MAX_EDGES)
 #error "EMB_ROLLBACK_REV_EDGES 超過 1/4 車輪 (91 邊緣) 的倒溜上限規格"
 #endif
@@ -325,10 +337,13 @@ minimum value accepted */
 //   保留可調是為了在實機出現誤鎖時，能用它排除極低速的抖動來源。
 #define EMB_ROLLBACK_MIN_PULSES 0
 
-// F/R 切換後的誤觸抑制窗 (ms)。方向更新只允許在車速 <= 1.0 km/h 時發生，但切換後車仍可能
-//   低速滑行於舊方向 → 命令與滾動反向 → 立即鎖定並閂鎖至鬆油門。只在「命令符號由非零翻到
-//   相反非零」時起算；由 0 變非零(上坡起步)不抑制，故坡道偵測仍是立即的。0 = 停用。
-#define EMB_ROLLBACK_FLIP_HOLDOFF_MS 300
+// F/R 排檔切換後的誤觸抑制窗 (ms)。排檔硬體開關被切換的瞬間，車與新排檔方向不一致是必然
+//   的過渡態(車還沒回應) → 若不抑制會立即誤觸鎖定。抑制窗內不觸發鎖定，讓車有時間停下或
+//   在新方向上開始移動。
+//   [2026-08-15] 300 → 500 ms。舊版由「命令」方向翻轉起算，命令歸零＝解除武裝作為
+//   附加保險;新版由「排檔」方向翻轉起算，沒有命令歸零的保險，需要更長的抑制窗涵蓋
+//   車實際減速停止的時間。
+#define EMB_ROLLBACK_FLIP_HOLDOFF_MS 500
 
 // =============================================================================
 //  下坡滑動偵測 (命令已歸零、車卻沒有在減速 → EMB 立即鎖定)
@@ -439,17 +454,15 @@ minimum value accepted */
 //     △ HallPulsesLatch —— 穩定但每 100ms 才更新，3 km/h 時有約 8 cm 的陳舊誤差。
 //     ✓ HallPeriod —— ISR 當下就有的瞬時值。週期與車速成反比，「速度上限」等價於
 //                     「週期下限」，一次無號比較即可，不需除法。
-//   假設 8 吋輪 (周長 638 mm)，與本節「1 邊緣 = 1.75 mm」同一組假設。
+//   輪徑與齒比取自 motor_scale.h (WHEEL_DIAMETER_INCH_X10 = 8.0 吋 → 周長 638 mm、
+//   GEAR_RATIO_X100 = 20.30)，與本節「1 邊緣 = 1.75 mm」同一組假設。
 //   HALL_MIN_PERIOD 若因刻度變更而偏離 434，motor_scale.h 的編譯期護欄會先擋下。
 //   對照表 (實際由下式算出的值，改參數後可用來核對)：
 //     1.5 km/h → 6562      2.5 km/h → 3929
 //     2.0 km/h → 4915      3.0 km/h → 3276
-#define EMB_WHEEL_CIRCUM_MM 638
-#define EMB_KMHX10_TO_HALL_PERIOD(kx)                                             \
+#define EMB_KMHX100_TO_HALL_PERIOD(kx)                                            \
     ((uint16_t)((HALL_MIN_PERIOD * 32768UL) /                                     \
-                RPMX10_TO_CMD((((uint32_t)(kx) * 1000000UL) /                     \
-                               (60UL * EMB_WHEEL_CIRCUM_MM)) *                    \
-                              GEAR_RATIO_X100 / 100UL)))
+                RPMX10_TO_CMD(KMHX100_TO_MOTOR_RPMX10(kx))))
 
 // 允許本偵測夾煞的車速上限 (km/h x10)。**上限之上絕不可能由本偵測夾煞** —— 見上方 (3)。
 //   下限被兩件事夾住：必須高於油門最低命令 0.97 km/h，且要留給陡坡的裕度 ——
@@ -459,14 +472,14 @@ minimum value accepted */
 //   設太低會讓**坡越陡越容易漏鎖** (車先衝過上限才走完位移)，那是保護方向顛倒，
 //   寧可留裕度。3 km/h 對 30% 坡仍有近一倍餘裕。
 //   對照：現況 failsafe 1000ms 在 10% 坡上要到約 3.9 km/h / 60 cm 才夾，本值是嚴格改善。
-#define EMB_DOWNHILL_MAX_SPEED_KMHX10 30
-#define EMB_DOWNHILL_MIN_PERIOD EMB_KMHX10_TO_HALL_PERIOD(EMB_DOWNHILL_MAX_SPEED_KMHX10)
+#define EMB_DOWNHILL_MAX_SPEED_KMHX100 300  // 3.00 km/h
+#define EMB_DOWNHILL_MIN_PERIOD EMB_KMHX100_TO_HALL_PERIOD(EMB_DOWNHILL_MAX_SPEED_KMHX100)
 
-#if (EMB_DOWNHILL_MAX_SPEED_KMHX10) < 15
-#error "EMB_DOWNHILL_MAX_SPEED_KMHX10 低於 1.5 km/h: 未高於油門最低命令(1.04 km/h)的必要裕度, 陡坡必然漏鎖"
+#if (EMB_DOWNHILL_MAX_SPEED_KMHX100) < 150
+#error "EMB_DOWNHILL_MAX_SPEED_KMHX100 低於 1.50 km/h: 未高於油門最低命令(0.97 km/h)的必要裕度, 陡坡必然漏鎖"
 #endif
-#if (EMB_DOWNHILL_MAX_SPEED_KMHX10) > 50
-#error "EMB_DOWNHILL_MAX_SPEED_KMHX10 高於 5 km/h: 帶速硬夾的衝擊與煞車片磨耗不可接受"
+#if (EMB_DOWNHILL_MAX_SPEED_KMHX100) > 500
+#error "EMB_DOWNHILL_MAX_SPEED_KMHX100 高於 5.00 km/h: 帶速硬夾的衝擊與煞車片磨耗不可接受"
 #endif
 
 // 電壓向量限制

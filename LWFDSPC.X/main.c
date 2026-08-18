@@ -254,6 +254,12 @@ volatile uint8_t g_u8EmbRevEdgeCnt = 0;
 // 命令非零時持續歸零 → 計數天然從「命令歸零」那一刻起算，不必另外清。
 // 16-bit 存取在 16-bit MCU 上為原子，不需臨界區。
 volatile int16_t g_i16EmbZeroCmdEdgeCnt = 0;
+// [有動力倒溜] 武裝旗標。true = EMB 已 RELEASE 過(車曾在動力狀態)，才允許倒溜偵測累計。
+// 目的:避免車停著、EMB LOCKED、駕駛剛切排檔時，人為推車後退立刻觸發 EMB LOCK 動作
+// (煞車本來就鎖著，該動作無效但會影響觸感/log)。EMB RELEASE 時置位、LOCK 時清零。
+// 讀取端見 CNRead_Inline 的計數邏輯與主迴圈的 bEmbRollbackDetected 合成。
+// 8-bit / bool 存取原子，不需臨界區。
+volatile bool g_bEmbRollbackArmed = false;
 // [下坡滑動] 「命令歸零後車沒有減速」的連續確認次數。CNRead_Inline 以霍爾週期比較累加，
 // 20ms 的 EMB 任務讀取。自由滑行的阻力恆為正 → 平路與上坡的週期必然逐步變長，因此
 // 「週期沒變長」等價於「重力已抵銷全部阻力，車不會自己停」。這是唯一不依賴車速門檻、
@@ -664,11 +670,12 @@ int main(void) {
     O_HEAD_LIGHT_LAT = 0;      // 初始關閉
     O_BRAKE_LIGHT_TRIS = 0;    // 煞車燈控制設為輸出
     O_BRAKE_LIGHT_LAT = 0;     // 初始關閉
-    O_EM_BRAKE_CTRL_TRIS = 0;  // 電磁煞車控制設為輸出
+    // O_EM_BRAKE_CTRL 由 SCCP2 PWM 驅動 (emb_pwm_init 已在 board_service 呼叫)。
+    // port_config 已設 TRISD1=0、CN 內部下拉、PPS 到 SCCP2:OCM2;此處不再直接寫 LAT。
 #if CODESW_EMBRAKER_ENABLE
-    O_EM_BRAKE_CTRL_LAT = 0;   // EMB enabled: start locked
+    emb_pwm_hardLock();      // EMB enabled: start locked
 #else
-    O_EM_BRAKE_CTRL_LAT = 1;   // EMB disabled for test: keep released
+    emb_pwm_hardRelease();   // EMB disabled for test: keep released
 #endif
 
 // 通訊相關初始化
@@ -1353,8 +1360,8 @@ int main(void) {
 #if CODESW_EMBRAKER_ENABLE
             // --- [REFACTORED] EMBRAKER logic now uses the master stop flag ---
             if (g_stSystemData.bMotorStop) {
-                // 電池保護或控制器過溫已啟動，強制鎖定電磁剎車
-                O_EM_BRAKE_CTRL_LAT = 0;  // 鎖定 (輸出LOW)
+                // 電池保護或控制器過溫已啟動，強制鎖定電磁剎車(緊急路徑,硬夾)
+                emb_pwm_hardLock();
             } else {
                 // 更新電磁煞車邏輯
 #if CODESW_EMBRAKER_TEST
@@ -1403,27 +1410,20 @@ int main(void) {
                 // [有動力倒溜/倒衝] 偵測訊號來自 CNRead_Inline 的連續反向霍爾邊緣計數
                 //   (g_u8EmbRevEdgeCnt)。與速度無關 → 再慢的潛行倒溜也會在固定位移內被抓到，
                 //   這是「倒溜不超過 1/4 車輪(91 邊緣)」規格的基礎。1 邊緣 = 車輪 1.75 mm。
+                //   [2026-08-15] 武裝來源由命令方向改為排檔方向 + EMB 曾 RELEASE，
+                //   完整理由見 CNRead_Inline 內的說明。
                 //
-                // [F/R 切換的抑制窗] 方向更新只允許在車速 <= 1.0 km/h 時發生(見下方 I_FR_SWITCH
-                //   的處理)，但切換後車仍可能以 <=1 km/h 滑行於舊方向 → 命令與滾動反向 → 會立即
-                //   鎖定並閂鎖至鬆油門。舊的 2 秒邏輯在此情境幾乎不會鎖(車先停了)，故這是新增的
-                //   鎖定事件。因此只在「命令符號由非零翻到相反非零」時起算抑制窗；由 0 變為非零
-                //   (上坡起步的情形)不抑制，坡道偵測仍然是立即的。
-                static int8_t s_i8EmbLastCmdSign = 0;
+                // [F/R 切換的抑制窗] 排檔硬體開關若在車還在滾時被切換，滾動方向與新的排檔方向
+                //   會不一致 → 立即觸發鎖定。但這是**排檔剛切、車尚未回應**的必然過渡態，不是
+                //   真正的倒溜。因此在排檔訊號翻轉時起算抑制窗，期間不觸發鎖定。
+                //   由 0 段(靜止)進入 F/R 段不抑制 —— 那個情境是起步，不是換向。
+                static int8_t s_i8EmbLastGearSign = 0;
                 static uint32_t s_u32EmbFlipMs = 0;
-                int8_t i8EmbCmdSign = 0;
-                if (piInputOmega.inReference > EMB_ROLLBACK_CMD_THRESHOLD) {
-                    i8EmbCmdSign = 1;
-                } else if (piInputOmega.inReference < -EMB_ROLLBACK_CMD_THRESHOLD) {
-                    i8EmbCmdSign = -1;
+                int8_t i8EmbGearSign = (uGF.DirSW == 0) ? +1 : -1;  // 排檔:+1=前進、-1=倒退
+                if ((s_i8EmbLastGearSign != 0) && (i8EmbGearSign != s_i8EmbLastGearSign)) {
+                    s_u32EmbFlipMs = g_stSystemData.u32TimeMs;  // 排檔翻轉
                 }
-                if ((i8EmbCmdSign != 0) && (s_i8EmbLastCmdSign != 0) &&
-                    (i8EmbCmdSign != s_i8EmbLastCmdSign)) {
-                    s_u32EmbFlipMs = g_stSystemData.u32TimeMs;  // 真正的 F→R / R→F 翻轉
-                }
-                if (i8EmbCmdSign != 0) {
-                    s_i8EmbLastCmdSign = i8EmbCmdSign;
-                }
+                s_i8EmbLastGearSign = i8EmbGearSign;
                 bool bEmbFlipHoldoff =
                     (EMB_ROLLBACK_FLIP_HOLDOFF_MS > 0) &&
                     ((g_stSystemData.u32TimeMs - s_u32EmbFlipMs) < EMB_ROLLBACK_FLIP_HOLDOFF_MS);
@@ -1488,16 +1488,41 @@ int main(void) {
 #if !CODESW_MOTOR_LOCK_TEST_ENABLE
                         MotorStallForceOutputZero();
 #endif
-                        O_EM_BRAKE_CTRL_LAT = 0;  // 鎖定 (輸出LOW)
+                        // [軟夾／硬夾分派]
+                        //   四個情境走硬夾(立即 0% duty),其餘走軟夾:
+                        //     (1) IBKS(uGF.BrakeSWOn)      駕駛主動命令,語意上要立即
+                        //     (2) bMotorStop                系統安全禁制,不可延遲
+                        //     (3) bEmbRollbackDetected      已滑到 28mm,再軟夾佔用倒溜預算
+                        //     (4) bEmbDownhillSlide         已滑到 26mm,同理
+                        //   (2) 在本 switch 外的 g_stSystemData.bMotorStop 分支已處理硬鎖,
+                        //     但那邊只覆蓋 O_EM_BRAKE 硬體,logic_embraker_update 仍會回傳 LOCK
+                        //     動作跑進本 switch。為保險,(2) 也列入本判斷條件。
+                        //   軟夾只用在**正常停車**路徑:WAITING_TO_LOCK 走完 UVW + SHORT_TO_LOCK_DELAY
+                        //     到期。此時車已停或近停,軟夾無安全代價、只是為了消震動。
+                        if ((uGF.BrakeSWOn == 1) || g_stSystemData.bMotorStop ||
+                            bEmbRollbackDetected || bEmbDownhillSlide) {
+                            emb_pwm_hardLock();
+                        } else {
+                            emb_pwm_startSoftClamp(EMB_SOFT_CLAMP_TICKS);
+                        }
                         g_u8EmbRevEdgeCnt = 0;
+                        // [有動力倒溜] EMB 已上鎖 → 解除武裝。煞車夾住後車不該再動,
+                        //   下次 RELEASE 才重新武裝。避免煞車鎖住狀態下人為推車後退觸發鎖定
+                        //   (該動作無效)。
+                        g_bEmbRollbackArmed = false;
                         // [下坡滑動] 偵測已被執行,位移預算用掉;煞車夾住後車不該再動,
                         //   兩個計數器一併清零,理由同上方 g_u8EmbRevEdgeCnt。
                         g_i16EmbZeroCmdEdgeCnt = 0;
                         g_u8EmbNoDecelCnt = 0;
                         break;
                     case EMBRAKER_ACTION_RELEASE:
-                        O_EM_BRAKE_CTRL_LAT = 1;  // 釋放 (輸出HI)
+                        emb_pwm_hardRelease();  // 釋放 (100% duty,若 ramp 進行中則中斷)
                         g_u8EmbRevEdgeCnt = 0;
+                        // [有動力倒溜] 武裝：機械煞車打開的這一刻起，車若倒溜就該立即上鎖。
+                        //   舊版靠命令 > 100 count 武裝,命令降到 100 以下就解除 → 上坡點放
+                        //   的減速斜坡期間漏接,見 CNRead_Inline 的說明。改為 RELEASE 起武裝,
+                        //   由排檔方向與滾動方向的一致性判定倒溜。
+                        g_bEmbRollbackArmed = true;
                         // [下坡滑動] 每次放煞車都從零起算。ISR 在「命令非零」時本來就會清這
                         //   兩個計數器,但車被夾住不動時 ISR 完全不執行 → 會凍結在達標值,
                         //   放開煞車的下一個 20ms tick 就立刻重鎖。理由同 g_u8EmbRevEdgeCnt。
@@ -1509,6 +1534,11 @@ int main(void) {
                         // 狀態無變化，不執行任何動作
                         break;
                 }
+
+                // [EMB 軟夾 ramp tick] 若正在漸降,推進一格;無 ramp 時 no-op。
+                //   放在 switch 之後:若本 tick 剛觸發 startSoftClamp,tick 下一週期才開始遞減
+                //   (讓完整的 duration 都是遞減時間,不會被本 tick 立刻扣掉一步)。
+                emb_pwm_tick20ms();
             }
 #endif
             // g_stSystemData.u16TorqueSensorRaw = (ADCBUF_TORQUE_SENSOR >> 4);
@@ -2550,10 +2580,38 @@ void DoControl(void) {
         // [A] 頂牆/堵轉放開後,近停且尚未 UVW 短路時,強制 coast(關 PWM)不讓 FOC 主動輸出,
         //   避免「零速→反向」交界的換相把馬達往後主動驅動(runaway 後退 1m+)。UVW lock 一armed
         //   即由下方短路分支接手保持。只在速度模式、油門已放開、且近停時作用 → 不影響有速度時的煞車。
+        //
+        // [實車問題 2026-08-14] 上坡點放油門會先「強烈震動」再滑行 —— 根因是本條件的
+        //   `HallPulsesLatch < UVW_LOCK_STOP_PULSES` **沒有遲滯**,在坡上會形成極限循環:
+        //     近停 → coast 進入(PWM 關,三個積分器清零) → 重力自由拉動車子加速
+        //       → 100ms 後 latch >= 4 → coast 退出(PWM 開) → FOC 以 reference 0 恢復,
+        //         車在倒退故誤差 = 0-(-v) = +v → 正向扭矩把車推回 → latch < 4 → 回到開頭
+        //   HallPulsesLatch 每 100ms 才更新,故這是約 5~10 Hz 的機械振盪;而且每次進 coast
+        //   都清零三個積分器,扭矩與電流都是階躍 → 震動很明顯。
+        //   平路不會發生:車單調減速到停,latch 掉到門檻下就待在那裡,coast 只進一次,
+        //   隨後 UVW lock(同一個門檻)latch 上由三相短路接手。上坡則是重力持續把 latch 推回
+        //   門檻上 → coast 反覆進出,**且 UVW lock 也永遠 latch 不上**,整條停車鏈同時失效。
+        //
+        //   → 改為**閂鎖**:一旦「放油門且近停」成立就維持 coast,直到
+        //     (a) 駕駛重新給油門 → 解閂,恢復正常驅動;或
+        //     (b) UVW lock latch 上 → 由下方三相短路分支接手(本旗標被 UVWLock==0 遮蔽);或
+        //     (c) EMB 夾住 → 車不再動,由機械煞車保持。
+        //   閂鎖後 PWM 不再開關,震動消失;車自由滑行的霍爾週期單調縮短,反而讓下坡/倒溜
+        //   偵測(EMB_DOWNHILL_*)更快更確定地在 26mm 處夾住 EMB。原本要防的「零速↔反向換相
+        //   往後驅動」保護不但保留,還維持得更久。
+        //   ⚠ 代價:震動期間 FOC 原有的間歇制動作用消失,倒溜會略快一點 —— 但 EMB 會在
+        //     26mm 處接手,總倒溜量仍遠小於改動前(靠 1s failsafe 時約 50cm)。
+        static bool s_bCoastLatched = false;
+        if (g_stSystemData.i16TargetRpm != 0) {
+            s_bCoastLatched = false;  // (a) 重新給油門 → 解閂
+        } else if ((uGF.UVWLock == 0) &&
+                   (HallPulsesLatch < UVW_LOCK_STOP_PULSES)) {
+            s_bCoastLatched = true;   // 放油門且近停 → 進閂 (之後不再看 latch)
+        }
         bool bStallReleaseCoast = (uGF.CtrlMode == 0) &&
                                   (g_stSystemData.i16TargetRpm == 0) &&
                                   (uGF.UVWLock == 0) &&
-                                  (HallPulsesLatch < UVW_LOCK_STOP_PULSES);
+                                  s_bCoastLatched;
 #if CODESW_BATTERY_PROTECTION_MODULE_ENABLE
         // 使用 s_logic_battery 模組的輸出禁制旗標來決定是否關閉 PWM
         if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast || logic_battery_shouldProhibitOutput()) {
@@ -2934,24 +2992,42 @@ void DoControl(void) {
             HallPulses++;
 
             // --- [有動力倒溜] 反向霍爾邊緣「淨」計數 (供 EMB 立即鎖定) ---
-            //   每個邊緣比對「滾動方向」與「命令方向」：反向 +1、正向 -1 (地板 0)。
-            //   符號慣例沿用上面那行：Direction == DirectionDefault ⇒ Speed 取負 ⇒ 往負方向滾。
+            //   每個邊緣比對「滾動方向」與「排檔方向」：反向 +1、正向 -1 (地板 0)。
             //   用邊緣「計數」而非速度，是為了讓偵測與速度無關 —— 再慢的潛行倒溜也會在固定
             //   位移(1 邊緣 = 車輪 1.75 mm)內被抓到，才能保證「不超過 1/4 車輪」的規格。
+            //
+            //   [2026-08-15] 參考訊號由「命令方向 (piInputOmega.inReference)」改為
+            //     「排檔方向 (uGF.DirSW，來自 F/R 硬體開關)」。
+            //   [為何改] 舊版以命令方向為武裝來源，命令降到 EMB_ROLLBACK_CMD_THRESHOLD(100)
+            //     以下就解除武裝、計數歸零。上坡點放油門的實際時序:
+            //       t=0     點油門     命令 = 1183 count，武裝生效
+            //       t=T     放油門     TargetRpm=0，進入減速斜坡
+            //       t=T~T+90ms 命令由 1183 降到 0，中途跨過 100 → **解除武裝、計數歸零**
+            //     倒溜位移一大半發生在 t=T~T+90ms 這段，舊版完全接不到 → 只能等 V0.21 的
+            //     沒減速偵測 (26mm 位移門檻) 接手。實車回報「上坡下滑 EMB 上鎖時前輪翹起」
+            //     的根因即在此:動能累積到 26mm 時峰值減速度已能翻覆。
+            //   [改用排檔訊號的三個理由]
+            //     (1) F/R 硬體開關訊號可信，不會像命令一樣在減速斜坡上「消失」
+            //     (2) 排檔=前進但車在倒溜，本來就是**駕駛意圖**與**實際運動**不符,語意最強
+            //     (3) 覆蓋窗口從「命令 > 100」延伸到「排檔=F 且 EMB 曾 RELEASE」全程
+            //   [為何加「EMB 曾 RELEASE」] 避免車停著、EMB LOCKED、駕駛剛切 F 開關時
+            //     人為推車後退立刻上鎖(硬體上煞車已在鎖住狀態，此鎖定沒意義但會影響觸感)。
+            //     此條件由 EMB LOCK 動作處清零、RELEASE 動作處置位(見該處)。
             //
             //   為何用「淨」而非「連續」：規格管的是淨倒溜位移，而連續計數只能界定單調位移。
             //   上坡與重力拉鋸時 (倒溜→積分器充飽→推前一小段→再倒溜)，連續計數每次都被歸零，
             //   淨位移卻早已超過 1/4 車輪 → 永遠不鎖。正向抵扣可讓拉鋸下的計數仍單調爬到門檻。
             //   地板取 0 而不讓它變負，是為了不讓長距離正常前進「預存額度」而延誤後續偵測。
             //   靜止抖動時方向交替 → 正負相抵停在 0 附近，故仍自動免疫。
-            //   註：門檻小時 (如 N=3) 本式與舊的連續計數行為幾乎相同；差異只在門檻放大後顯現。
             {
-                signed int i16EmbCmdRef = piInputOmega.inReference;
-                if ((i16EmbCmdRef > EMB_ROLLBACK_CMD_THRESHOLD) ||
-                    (i16EmbCmdRef < -EMB_ROLLBACK_CMD_THRESHOLD)) {
+                // 排檔方向：uGF.DirSW 由 I_FR_SWITCH_PIN 直接讀取(見 main.c bMotorDirection 賦值處)。
+                //   0=前進、1=倒退。約定符號:bEmbGearReverse=true 表示排檔在倒退位置。
+                bool bEmbGearReverse = (uGF.DirSW != 0);
+
+                if (g_bEmbRollbackArmed) {
                     bool bEmbRollingNeg = (uGF.Direction == uGF.DirectionDefault);
-                    bool bEmbCmdNeg = (i16EmbCmdRef < 0);
-                    if (bEmbRollingNeg != bEmbCmdNeg) {
+                    if (bEmbRollingNeg != bEmbGearReverse) {
+                        // 滾動方向與排檔方向不一致 → 倒溜
                         if (g_u8EmbRevEdgeCnt < 255u) {
                             g_u8EmbRevEdgeCnt++;
                         }
@@ -2959,8 +3035,7 @@ void DoControl(void) {
                         g_u8EmbRevEdgeCnt--;  // 方向一致 → 抵扣一個邊緣的倒溜位移
                     }
                 } else {
-                    // 無有效驅動命令 → 解除武裝 (無動力倒溜由 WAITING_TO_LOCK 的 Plan B 處理)
-                    g_u8EmbRevEdgeCnt = 0;
+                    g_u8EmbRevEdgeCnt = 0;  // 未武裝 → 保持歸零
                 }
             }
 

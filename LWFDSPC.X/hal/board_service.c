@@ -73,6 +73,9 @@ void Init_Peripherals(void)
     
     /* Initialize PWM generators */
     InitPWMGenerators();
+
+    /* Initialize SCCP2 for EMB PWM (see hal/pwm.h for full spec) */
+    emb_pwm_init();
     
     /* Initialize the ADC used for sensing Inverter A parameters */
     InitializeADCs();

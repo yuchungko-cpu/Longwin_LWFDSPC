@@ -321,9 +321,20 @@ void MapGPIOHWFunction(void) {
     TRISDbits.TRISD2 = 0;
     LATDbits.LATD2 = 0;  // 初始狀態為低電位
 
-    // 電磁煞車控制 - Pin 59: RD1 (OEMB)
+    // 電磁煞車控制 - Pin 59: RD1 (OEMB) → PWM 由 SCCP2 OCM2 驅動 (hal/pwm.c 的 emb_pwm_*)
+    //   [2026-08-17] 由純數位 LAT 改為 PWM 輸出,以支援 EMB 軟夾。
+    //   PPS 於 MCU reset 後預設解鎖 (RPCON = 0x0000),本檔的 UART TX PPS 賦值即依此,
+    //   本 SCCP2 映射沿用同一慣例,不需額外 __builtin_write_RPCON()。
+    //   TRISD1 = 0 讓 pin 為輸出;LATD1 = 0 讓 SCCP2 未啟動前的預設輸出為 LOW(EMB 鎖住 = 安全)。
+    //   ⚠ Fail-safe:電路上 OEMB 沒看到明確的下拉電阻。以下三層保險共同確保安全預設:
+    //     (1) LATD1 = 0 → SCCP2 啟動前輸出 LOW
+    //     (2) CNPDD1 = 1 → MCU reset 導致 pin 高阻抗時,內部下拉把 pin 拉到 GND
+    //     (3) SCCP2 初始 duty = 0 → 即使 SCCP2 已啟動,輸出仍是 LOW
+    //     若日後有更嚴格的安全要求(如 SIL),仍建議在硬體加 10~100k 外部下拉。
     TRISDbits.TRISD1 = 0;
-    LATDbits.LATD1 = 0;  // 初始狀態為低電位
+    LATDbits.LATD1 = 0;                  // SCCP2 啟動前預設 LOW = EMB 鎖住(安全)
+    CNPDDbits.CNPDD1 = 1;                // 啟用 RD1 內部下拉
+    RPOR16bits.RP65R = 0x0010;           // RD1 (RP65) → SCCP2:OCM2  (值取自 MCC 產出)
 
     // CAN待機控制 - Pin 47: RB7 (STB)
     TRISBbits.TRISB7 = 0;
