@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LWFDSPC 韌體工作紀錄 — 2026-08-19 (V0.24)</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0;
+          --accent:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+          --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.6; }
+  .wrap { max-width:960px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 28px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:20px 24px; margin:0 0 20px; }
+  h2 { font-size:1.25rem; margin:0 0 12px; border-left:4px solid var(--accent);
+       padding-left:10px; }
+  h3 { font-size:1.02rem; margin:18px 0 8px; color:var(--accent); }
+  code { background:var(--code); padding:1px 6px; border-radius:4px;
+         font-family:Consolas,"Courier New",monospace; font-size:.9em; color:#ffd580; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow-x:auto; font-family:Consolas,monospace;
+        font-size:.86rem; }
+  pre.del { border-left:4px solid var(--bad); }
+  pre.add { border-left:4px solid var(--ok); }
+  .tag { display:inline-block; font-size:.72rem; font-weight:700; padding:2px 9px;
+         border-radius:20px; margin-left:8px; vertical-align:middle; }
+  .tag.fix { background:rgba(63,185,80,.18); color:var(--ok); }
+  .tag.cfg { background:rgba(78,161,255,.18); color:var(--accent); }
+  .tag.info{ background:rgba(210,153,34,.18); color:var(--warn); }
+  .tag.bad { background:rgba(248,81,73,.18); color:var(--bad); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.9rem; }
+  th,td { border:1px solid var(--border); padding:8px 10px; text-align:left; }
+  th { background:rgba(78,161,255,.1); }
+  ul { margin:8px 0; padding-left:22px; }
+  li { margin:4px 0; }
+  .file { color:var(--muted); font-family:Consolas,monospace; font-size:.85rem; }
+  .foot { color:var(--muted); font-size:.82rem; text-align:center; margin-top:36px; }
+  .box { border-radius:8px; padding:12px 15px; margin:12px 0; font-size:.92rem; }
+  .box.ok  { background:rgba(63,185,80,.10);  border-left:4px solid var(--ok); }
+  .box.warn{ background:rgba(210,153,34,.10); border-left:4px solid var(--warn); }
+  .box.bad { background:rgba(248,81,73,.10);  border-left:4px solid var(--bad); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LWFDSPC 韌體工作紀錄</h1>
+  <p class="sub">專案:Longwin_LWFDSPC_V0.2 &nbsp;|&nbsp; 日期:2026-08-19 &nbsp;|&nbsp; 分支:main
+    &nbsp;|&nbsp; 產出:commit <code>b76eee9</code> · tag <code>v0.24</code>(已 push)</p>
+
+  <div class="card">
+    <h2>0. 今日輸入:V0.23 實車回報三項</h2>
+    <table>
+      <tr><th style="width:40px">#</th><th>回報內容</th><th style="width:150px">處理</th></tr>
+      <tr><td>1</td><td>EMB 採 PWM 軟夾後,上下坡夾煞應力大幅下降,不再有應力過大把前輪抬起的問題。
+        驗證值 <code>EMB_SOFT_CLAMP_TICKS = 5</code>(100 ms)</td><td>參數落地</td></tr>
+      <tr><td>2</td><td>上坡起步有時會下滑鎖住,延長下滑距離即正常。
+        <code>EMB_ROLLBACK_REV_EDGES = 24</code>、<code>EMB_DOWNHILL_NODECEL_LOOKBACK = 24</code></td><td>參數落地</td></tr>
+      <tr><td>3</td><td><b>平地前進放開加速器,減速剎車正常時非常平順,但有時有明顯頓挫</b>。
+        柏油與瓷磚皆同。追問後補充:<b>近停時 UVW lock 有時未啟動,車子繼續低速前進,最後被 EMB 夾停而震動</b>;
+        PWM 軟夾能減緩但不能消除;V0.22 之前未測到此狀況</td><td>本次主要修正</td></tr>
+    </table>
+    <div class="box ok"><b>客戶定調的設計準則</b>(據以修正):速度模式下不應存在「PWM 全關」狀態;
+      低速到一定程度就該進 UVW 短路;EMB 鎖住時 UVW 也要一直生效;coast 完全不需要。</div>
+  </div>
+
+  <div class="card">
+    <h2>1. 根因判定:coast 與 UVW 進鎖的訊號域不一致<span class="tag fix">ROOT CAUSE</span></h2>
+    <p class="file">main.c(V0.23) 停車鏈:UVW 進鎖判斷 · coast 閂鎖 · PWM 輸出分支</p>
+
+    <h3>兩個機制搶同一個時機,車速條件相同、命令條件不同</h3>
+    <table>
+      <tr><th style="width:110px"></th><th>命令條件</th><th>成立時機</th><th>動作</th></tr>
+      <tr><td><b>coast</b></td><td><code>TargetRpm == 0</code></td><td>放油門<b>瞬間</b></td>
+        <td>六個開關全關(<code>OVRDAT=0 / OVREN=1</code>),並每個 50 µs pass 清三個積分器</td></tr>
+      <tr><td><b>UVW 短路</b></td><td><code>ReferenceRAW == 0</code></td>
+        <td>減速斜坡走完,<b>最多晚約 700~800 ms</b>(曲線 2 = R30/2ms + τ64ms + 100 count 吸零)</td>
+        <td>三相下橋全開(<code>OVRDAT=1</code>),有制動力</td></tr>
+    </table>
+    <p>兩者的車速閘門都是 <code>HallPulsesLatch &lt; UVW_LOCK_STOP_PULSES(4)</code>。於是
+      「放油門後、斜坡還沒走完就已近停」會落進一段 <b>PWM 全關、零制動</b> 的窗口。</p>
+
+    <h3>死結如何形成</h3>
+    <ul>
+      <li><code>bStallReleaseCoast</code> 帶了 <code>uGF.UVWLock == 0</code> → 只要 UVW 進不去,就一直停在全關那一支。</li>
+      <li>零制動下車因路面微傾斜或殘餘動量以 0.2~0.5 km/h 潛行 → <code>HallPulsesLatch</code> 回不到 4 以下 → UVW 永遠進不去。</li>
+      <li>V0.23 起 coast 是<b>閂鎖</b>(退閂只有「重新給油門」或「UVW 生效」)→ 也出不來。</li>
+      <li>只剩 <code>EMBRAKER_LOCK_TIMEOUT_MS(1500 ms)</code> failsafe 帶速夾停 = 回報的震動,
+        而「感覺 UVW lock 沒啟動」字面上就是事實。</li>
+    </ul>
+
+    <div class="box warn"><b>為何 V0.22 沒有此症狀</b>:V0.22 的 coast 沒有閂鎖,latch 一升過 4 就退出全關,
+      FOC 以 reference 0 繼續制動把車真正停住 → UVW 接手。V0.23 為修上坡震動把它改成閂鎖,
+      平路就少了這條收尾制動;當時 commit 假設「平路單調減速故不受影響」,該假設在微傾斜路面不成立。</div>
+
+    <div class="box ok"><b>進一步發現</b>:<code>bStallReleaseCoast</code> 本身就是「UVW 進鎖用錯訊號」的補丁 ——
+      它要守的空窗(頂牆/堵轉放開後、近停但 UVW 還沒短路)之所以存在,正是因為堵轉時命令很大、
+      <code>ReferenceRAW</code> 要走完整條斜坡才歸零。把進鎖改看油門目標後,該空窗直接消失。</div>
+  </div>
+
+  <div class="card">
+    <h2>2. 修正:UVW 進鎖改用與出鎖同一個訊號域<span class="tag fix">FIX</span></h2>
+    <p class="file">main.c · DoControl() · bUvwStopCommanded</p>
+<pre class="del">- bool bUvwStopCommanded = (ReferenceRAW == 0) &amp;&amp;
+-                          (ctrlParm.qVelRef == 0) &amp;&amp;
+-                          (HallPulsesLatch &lt; UVW_LOCK_STOP_PULSES);</pre>
+<pre class="add">+ bool bUvwStopCommanded = (g_stSystemData.i16TargetRpm == 0) &amp;&amp;
++                          (HallPulsesLatch &lt; UVW_LOCK_STOP_PULSES);</pre>
+    <ul>
+      <li>出鎖條件 <code>bUvwDriveRequested</code> 原本就是看 <code>i16TargetRpm</code> →
+        進/出鎖成為<b>同一訊號的遲滯對</b>(0 進鎖 / ≥ <code>UVW_LOCK_RELEASE_REF(500)</code> 出鎖)。</li>
+      <li><b>車速門檻完全沒動</b>(仍 0.25 km/h),不會比原本更早帶速進短路。</li>
+      <li>附帶效果:堵轉/頂牆放油門(命令大、latch=0)也會<b>立即</b>進短路 —— 那正是舊 coast 的職責,
+        而短路比浮接多了制動力,結構上同樣不可能驅動馬達。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>3. 修正:speed mode 完全移除 coast<span class="tag fix">FIX</span></h2>
+    <p class="file">main.c · PWM 輸出分支 · src/control2.h</p>
+    <p>刪除 <code>s_bCoastLatched</code> / <code>bStallReleaseCoast</code> 整塊(含 V0.23 的閂鎖邏輯),
+      並把 <code>uGF.Coast</code> 從 PWM 關閉條件移除:</p>
+<pre class="del">- if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast || logic_battery_shouldProhibitOutput()) {</pre>
+<pre class="add">+ if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || logic_battery_shouldProhibitOutput()) {</pre>
+    <p>馬達現在只有兩種通電狀態:<b>FOC</b> 或 <b>UVW 三相短路</b>。PWM 全關只剩三個系統理由:</p>
+    <table>
+      <tr><th style="width:210px">條件</th><th>為什麼保留</th></tr>
+      <tr><td><code>uGF.RunMotor == 0</code></td><td>未運轉,含 IBKS(手剎車/充電中)按下 —— <b>充電時不可短路馬達</b></td></tr>
+      <tr><td><code>uGF.Fault == 1</code></td><td>故障閂鎖(過流/霍爾異常/60 秒堵轉)—— 故障的橋不該短路</td></tr>
+      <tr><td>電池模組輸出禁制</td><td>過壓/低壓保護</td></tr>
+    </table>
+    <p><code>uGF.Coast</code> 仍有寫入者(<code>bMotorStop</code>、堵轉歸零、VR 失效路徑)但<b>已無讀取者</b>;
+      欄位保留並在 <span class="file">control2.h</span> 標註退役理由。</p>
+    <div class="box ok"><b>V0.23 的上坡震動不會回來</b>:那個震動的機制就是 coast 反覆進出
+      (PWM 開關 + 每次清三個積分器造成扭矩階躍)。coast 移除後 FOC 連續運作,倒溜時
+      error = 0−(−v) = +v 會平順地抵抗,不再有階躍。</div>
+    <div class="box warn"><b>相依性</b>:本設計依賴 <code>CODESW_UVW_LOCK_ENABLE == 1</code> ——
+      短路分支是「馬達不要出力」的唯一實作者。若為除錯關掉 UVW lock,就只剩「命令歸零」一層。
+      已在程式註解標明。</div>
+  </div>
+
+  <div class="card">
+    <h2>4. 修正:EMB 夾住的全程保持 UVW 短路<span class="tag fix">FIX</span></h2>
+    <p class="file">main.c · DoControl() · bUvwEmbClamped</p>
+<pre class="add">+ E_EMBRAKER_STATE eUvwEmbState = logic_embraker_getStatus();
++ bool bUvwEmbClamped = (eUvwEmbState == EMBRAKER_STATE_LOCKED) ||
++                       (eUvwEmbState == EMBRAKER_STATE_FAULT);
+
+  if (uGF.UVWLock == 1) {
+-     if (bUvwDriveRequested) uGF.UVWLock = 0;
++     if (bUvwDriveRequested &amp;&amp; !bUvwEmbClamped) uGF.UVWLock = 0;
+- } else if (bUvwStopCommanded &amp;&amp; !bUvwDriveRequested) {
++ } else if ((bUvwStopCommanded &amp;&amp; !bUvwDriveRequested) || bUvwEmbClamped) {
+      uGF.UVWLock = 1;
+  }</pre>
+    <ul>
+      <li>夾住期間<b>不看車速門檻</b>(EMB 都夾了,車速的顧慮歸夾煞路徑負責)。</li>
+      <li><b>出鎖也被它擋住</b>:倒溜閂鎖或段位 0 時駕駛握著油門,馬達不會對著夾緊的煞車出力(免堵轉發熱)。</li>
+      <li>靜止時短路零電流(制動扭矩 ∝ 反電動勢 ∝ 轉速),不耗電不發熱;被外力推動時提供與 EMB 同向的制動力。</li>
+      <li>EMB 一放開(<code>RELEASED</code>)本旗標即消失,同 tick 內 <code>bUvwDriveRequested</code> 就解鎖;
+        起步最多多 20 ms(EMB 任務週期),機械煞車本身的釋放時間更長,體感無差異。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>5. 修正:下坡偵測判準改為「週期必須真的變短」<span class="tag fix">FIX</span></h2>
+    <p class="file">main.c · CNRead_Inline() · userparms.h 的 EMB_DOWNHILL_NODECEL_*</p>
+
+    <h3>舊判準的缺陷(獨立於項目 3,但同樣貢獻平地頓挫)</h3>
+    <p>「週期沒變長(或變長不到 1/2<sup>S</sup>)就算沒減速」<b>不是速度無關的</b>。把它換算成減速度,隱含門檻是</p>
+    <pre>a_th = v² / (2^TOL_SHIFT × d_LOOKBACK)      d_LOOKBACK = LOOKBACK × 1.75 mm</pre>
+    <p>分子是 v²,車速愈高門檻愈鬆。以 S=6、LOOKBACK=24(d=42 mm)計:</p>
+    <table>
+      <tr><th>車速</th><th>a_th</th><th>對平路阻力估 0.2 m/s² 的關係</th></tr>
+      <tr><td>0.97 km/h</td><td>0.027 m/s²</td><td>餘裕 7 倍,安全(舊註解只驗算過這一點)</td></tr>
+      <tr><td>2.0 km/h</td><td>0.115 m/s²</td><td>餘裕縮小</td></tr>
+      <tr><td>3.0 km/h</td><td><b>0.257 m/s²</b></td><td><b>已超過阻力估值 → 平路被判成「沒減速」</b></td></tr>
+    </table>
+    <p>→ 平路在 2.6~3.0 km/h(恰在 3 km/h 上限以下)自由滑行時會誤觸,而且下坡偵測走<b>硬夾</b>。</p>
+
+    <h3>修正</h3>
+<pre class="del">- (HallPeriod &gt; EMB_DOWNHILL_MIN_PERIOD) &amp;&amp;
+- ((HallPeriod &lt;= u16Old) ||
+-  ((uint16_t)(HallPeriod - u16Old) &lt;= (uint16_t)(u16Old &gt;&gt; EMB_DOWNHILL_NODECEL_TOL_SHIFT)))</pre>
+<pre class="add">+ (HallPeriod &gt; EMB_DOWNHILL_MIN_PERIOD) &amp;&amp;
++ (u16Old &gt; HallPeriod) &amp;&amp;
++ ((uint16_t)(u16Old - HallPeriod) &gt;= (uint16_t)(u16Old &gt;&gt; EMB_DOWNHILL_NODECEL_TOL_SHIFT))</pre>
+    <ul>
+      <li>維持原檔案「先比大小再相減、全程留在 16-bit」的紀律。</li>
+      <li><code>TOL_SHIFT</code> 語意由「容忍變長」變成「必須變短的最小量」(純雜訊裕度),值仍 6(1.6%)。
+        <b>調整方向與 V0.23 速查表相反</b>,已在文件標警示。</li>
+      <li>自由滑行阻力恆為正 → 平路/上坡週期必然變長 → <b>任何車速、任何阻力下結構上都不可能觸發</b>
+        (這才是註解一直宣稱、但舊寫法並不成立的性質)。</li>
+    </ul>
+    <table>
+      <tr><th>坡度(24 邊緣基線,起點 0.97 km/h)</th><th>週期變化</th><th>判定</th></tr>
+      <tr><td>平路</td><td>+14%</td><td>不觸發 ✔</td></tr>
+      <tr><td>2%(阻力與重力打平)</td><td>≈ ±0%</td><td>不觸發 → 退回 failsafe 保底(約 1 km/h,衝擊小)</td></tr>
+      <tr><td>5%</td><td>−13%</td><td>觸發 ✔(對 1.6% 裕度有 8 倍餘裕)</td></tr>
+      <tr><td>10% / 20%</td><td>−27% / −43%</td><td>觸發 ✔</td></tr>
+    </table>
+    <p>巨集與計數器沿用 V0.21 的 <code>NODECEL</code> 命名以維持與客戶調校表的對應,語意變更已在各處註明。</p>
+  </div>
+
+  <div class="card">
+    <h2>6. 實車驗證值落地<span class="tag cfg">CONFIG</span></h2>
+    <table>
+      <tr><th>參數</th><th style="width:150px">原值 → 新值</th><th>物理量</th><th>依據</th></tr>
+      <tr><td><code>EMB_SOFT_CLAMP_TICKS</code></td><td>10 → <b>5</b></td><td>200 ms → 100 ms</td>
+        <td>軟夾已消除夾煞應力,100 ms 足夠削峰值且無延遲感</td></tr>
+      <tr><td><code>EMB_ROLLBACK_REV_EDGES</code></td><td>16 → <b>24</b></td><td>28 mm → 42 mm</td>
+        <td>16 太靈敏,上坡起步被誤鎖。相對 1/4 車輪護欄 91 仍有 3.8 倍餘裕</td></tr>
+      <tr><td><code>EMB_DOWNHILL_NODECEL_LOOKBACK</code></td><td>12 → <b>24</b></td><td>基線 21 → 42 mm</td>
+        <td>12 上坡容易鎖住;基線加長同時降低誤觸與提高訊噪比</td></tr>
+      <tr><td><code>EMB_DOWNHILL_SLIDE_EDGES</code></td><td>15 → <b>27</b>(推導)</td><td>26 mm → 47 mm</td>
+        <td>= LOOKBACK + CONFIRM,隨 LOOKBACK 自動變動</td></tr>
+    </table>
+    <p>其餘一律未動:<code>TOL_SHIFT</code> 6、<code>CONFIRM</code> 3、<code>MAX_SPEED_KMHX100</code> 300、
+      <code>SHORT_TO_LOCK_DELAY_MS</code> 150、<code>LOCK_TIMEOUT_MS</code> 1500、<code>UVW_LOCK_STOP_PULSES</code> 4。</p>
+    <p>新增編譯期護欄:<code>EMB_DOWNHILL_NODECEL_LOOKBACK</code> 必須是 6 的倍數(原本只有註解)。</p>
+    <div class="box warn"><b>下次路試要留意</b>:這三個值是在 V0.23(coast 還在、上坡點放時零制動)上量出來的。
+      coast 移除後 UVW 提早進鎖,Plan B(反向邊緣即夾)也提早武裝 → <b>同樣參數下實際倒溜/下滑距離會更短</b>。
+      建議先用現值跑一輪、量實際位移,再決定 24 要不要往下調(夾煞動能更小),不要現在先猜。</div>
+  </div>
+
+  <div class="card">
+    <h2>7. 新增:EMB 夾煞原因觀測點<span class="tag info">DIAG</span></h2>
+    <p class="file">s_logic_embraker.c/.h · logic_embraker_getLastLockReason() · main.c 的 LOCK 分支</p>
+    <p>實車無法即時觀測,故做成「事後可讀」的累計值(RAM,斷電歸零;空載台架可用 X2CScope 即時看)。
+      十個回傳 LOCK 的分支全部記錄原因,計數器只在 LOCK 的<b>上升緣</b>累加
+      (FAULT 與倒溜閂鎖每個 20 ms tick 都會回傳 LOCK,不擋掉會灌爆計數器)。</p>
+    <table>
+      <tr><th style="width:230px">變數</th><th>意義</th></tr>
+      <tr><td><code>g_u8EmbLockReason</code></td><td>最後一次的原因碼:1 = UVW+延遲(正常停車)、2 = failsafe、
+        3 = 下坡滑動、4 = 倒溜、5 = Plan B、6 = IBKS、7 = 倒溜閂鎖保持、8 = 故障、9 = 運轉前檢查</td></tr>
+      <tr><td><code>g_u16EmbLockCntUvwDelay / Failsafe / Downhill / Rollback / Other</code></td>
+        <td>各原因累計次數</td></tr>
+      <tr><td><code>g_i16EmbLockPulses</code> / <code>g_u16EmbLockPeriod</code></td>
+        <td>夾煞當下的 <code>HallPulsesLatch</code> / <code>HallPeriod</code>(= 夾煞瞬間車速)</td></tr>
+    </table>
+    <p><b>判讀</b>:平地停車 N 次後,<code>CntUvwDelay</code> 應等於 N,<code>CntFailsafe</code> 應為 0。
+      任何 <code>Failsafe</code> 或 <code>Downhill</code> 計數都代表停車鏈有路徑失效。</p>
+  </div>
+
+  <div class="card">
+    <h2>8. 審視:控制器過溫(未修改,等客戶規範)<span class="tag info">REVIEW</span></h2>
+    <p class="file">s_logic_temp_controller.c/.h · main.c:1312-1354 · 20 ms 任務</p>
+    <table>
+      <tr><th>溫度</th><th>分區</th><th>電流上限比例</th><th>行為</th></tr>
+      <tr><td>&lt; 53°C</td><td>NORMAL</td><td>0.35(≈16 A)</td><td>無限制</td></tr>
+      <tr><td>53 / 58 / 63 / 68 / 73°C</td><td>LEVEL 1~5</td><td>0.33 / 0.31 / 0.291 / 0.273 / 0.254</td>
+        <td><b>只降電流</b>,車照跑(爬坡無力、重載極速略降)</td></tr>
+      <tr><td><b>≥ 78°C</b></td><td>OVERTEMP</td><td><b>0.0</b></td>
+        <td><code>bMotorStop</code> → 扭矩命令同 tick 歸零 + <code>emb_pwm_hardLock()</code> <b>立即硬夾</b></td></tr>
+      <tr><td>&lt; 76°C</td><td>解除</td><td>依溫度回對應分區</td><td>遲滯 2°C</td></tr>
+    </table>
+    <p>所以「直接停」只發生在 ≥78°C,且不是減速到 0,而是<b>扭矩瞬間歸零 + 機械煞車硬夾</b> ——
+      沒有減速斜坡、沒有軟夾、也沒有車速閘門。煞停完全靠機械硬夾。</p>
+    <p>待客戶確認規範時要一起討論的三點:</p>
+    <ul>
+      <li>73°C(12 A)到 78°C(0 A + 硬夾)之間只有 5°C,<b>沒有跛行回家階段</b>。</li>
+      <li>過溫夾煞是全系統最粗暴的路徑(硬夾、無車速閘門),而客戶本次抱怨的正是帶速夾煞震動;
+        <code>EMB_SOFT_CLAMP_TICKS</code> 的軟夾刻意排除了 <code>bMotorStop</code>。</li>
+      <li>限流過程<b>對外完全無提示</b>:<code>bControllerIsOverLoad</code> 有寫入但無讀取者,
+        A05 上報那兩行被註解掉(<span class="file">s_logic_temp_controller.c:158-159</span>),
+        Modbus 的 <code>bMotorOverload</code> 永遠是 0。駕駛體感是「先莫名沒力,再突然剎停」。</li>
+    </ul>
+    <div class="box bad"><b>順帶發現的既有缺陷(與規範無關,尚未修)</b>:
+      <code>bMotorStop</code> 期間 EMB 狀態機被整段跳過(<code>if (bMotorStop) 硬夾; else { 狀態機 }</code>),
+      狀態凍結在 <code>RELEASED</code>。溫度恢復後若駕駛<b>還握著油門</b>,<code>RELEASED</code> 分支對該組合沒有動作
+      → 沒有人發出 RELEASE → <b>機械煞車保持夾住</b>,同時電流上限恢復 → FOC 對著夾緊的煞車出力堵轉
+      (8 秒後電流砍半、60 秒後閂鎖)。要脫離必須放掉油門一次。
+      電池保護走同一條路,症狀相同。修法:<code>bMotorStop</code> 硬夾時把 EMB 狀態強制成 <code>LOCKED</code>
+      (同 IBKS 分支的作法,其註解本就寫明要避免「硬體被鎖住卻沒有任何分支負責解鎖」)。</div>
+  </div>
+
+  <div class="card">
+    <h2>9. 驗證狀態</h2>
+    <h3>已完成(程式碼層面)</h3>
+    <ul>
+      <li>28 個 C translation unit 以專案自身旗標編譯(xc-dsc v3.31、<code>-Wall</code>),<b>zero warnings</b>。</li>
+      <li>從 object file 讀回推導常數核對:<code>SLIDE_EDGES = 27</code>、
+        <code>MIN_PERIOD = 3276</code>(3.00 km/h)、<code>ROLLBACK_MAX_EDGES = 91</code>、
+        <code>SOFT_CLAMP_TICKS = 5</code>、<code>ROLLBACK_REV_EDGES = 24</code>、<code>LOOKBACK = 24</code>、
+        <code>TOL_SHIFT = 6</code>、<code>CONFIRM = 3</code>、<code>UVW_LOCK_STOP_PULSES = 4</code>、
+        <code>UVW_LOCK_RELEASE_REF = 500</code>、<code>LOCK_TIMEOUT_MS = 1500</code>。</li>
+      <li>把 LOOKBACK 暫設為 13,確認新增的 6 倍數 <code>#error</code> 會擋下,再還原。</li>
+    </ul>
+    <h3>未完成:實車/台架驗證(9 項,見 quick_tuning_sheet_V0.24.html)</h3>
+    <div class="box bad"><b>最不能跳過的一項</b>:堵轉/頂牆後放油門 —— 這是原
+      <code>bStallReleaseCoast</code> 的職責,移除後必須確認<b>不會反向暴衝</b>,應由 UVW 短路立即壓住。
+      建議先在台架或有防護的場地做(含堵轉 &gt; 8 秒進入電流限制後再放)。</div>
+    <p>其餘重點:台架 X2CScope 確認停車過程<b>不出現三相全關</b>且夾煞後 <code>UVWLock</code> 保持 1;
+      平路不同起始車速各停 ≥10 次;上坡點放 ≥10 次(V0.23 修掉的震動不得回來);
+      下坡與 2% 緩坡;停車顫動;近停途中再催油門。</p>
+  </div>
+
+  <div class="card">
+    <h2>10. 交付與版控</h2>
+    <ul>
+      <li>commit <code>b76eee9</code>(8 個檔案)→ <code>origin/main</code>,沿用 V0.23 的單一 release commit 風格。</li>
+      <li>annotated tag <code>v0.24</code> → 已 push(格式同 v0.20/v0.23)。</li>
+      <li>程式:<span class="file">main.c</span>、<span class="file">src/control2.h</span>、
+        <span class="file">src/userparms.h</span>、<span class="file">src/longwin/s_logic_embraker.c/.h</span>。</li>
+      <li>文件:新增 <span class="file">quick_tuning_sheet_V0.24.html</span>(照 repo 慣例另開一份,
+        V0.23 那份留作歷史紀錄);順手把一直未追蹤的 V0.23 速查表 HTML+PDF 納入版控。
+        <b>兩份 PDF 需自行重新輸出。</b></li>
+    </ul>
+    <p><b>刻意未提交</b>:</p>
+    <ul>
+      <li><span class="file">LWFDSPC.X/nbproject/*</span>(5 個檔案)—— MPLAB X 自動產物
+        (build flag 雜湊、<code>host.id</code>、時間戳、<code>proj.dir</code> 由 V0.1 舊路徑改為現路徑),
+        屬機器本地資訊,是否納入由人決定。</li>
+      <li><span class="file">LWFDSPC.X/datasheet/</span>(4.8 MB 原廠 dsPIC33CK datasheet)——
+        要不要把原廠文件納版控是另一個決定。</li>
+    </ul>
+  </div>
+
+  <p class="foot">Generated 2026-08-19 · LWFDSPC.X firmware worklog · V0.24</p>
+</div>
+</body>
+</html>
