@@ -23,6 +23,25 @@ typedef enum {
     EMBRAKER_ACTION_RELEASE  // 指令：釋放煞車 (將OEMB設為HI)
 } E_EMBRAKER_ACTION;
 
+/**
+ * @brief 最後一次回傳 EMBRAKER_ACTION_LOCK 的原因
+ * @note  純診斷用，不參與任何控制判斷。實車無法即時觀測時，事後以 debugger/X2CScope
+ *        讀 main.c 的 g_u8EmbLockReason 與各原因計數器，即可知道停車是走哪條路徑夾的
+ *        (正常停車應為 UVW_DELAY;若看到 FAILSAFE 或 DOWNHILL，代表停車鏈有路徑失效)。
+ */
+typedef enum {
+    EMBRAKER_LOCK_REASON_NONE = 0,      // 尚未夾過
+    EMBRAKER_LOCK_REASON_UVW_DELAY,     // 1 = 正常停車：UVW 短路生效 + SHORT_TO_LOCK_DELAY
+    EMBRAKER_LOCK_REASON_FAILSAFE,      // 2 = 命令歸零後 LOCK_TIMEOUT 逾時 (帶速夾，異常)
+    EMBRAKER_LOCK_REASON_DOWNHILL,      // 3 = 下坡滑動偵測 (硬夾)
+    EMBRAKER_LOCK_REASON_ROLLBACK,      // 4 = 有動力倒溜偵測 (硬夾)
+    EMBRAKER_LOCK_REASON_REVERSE_EDGE,  // 5 = Plan B：UVW 生效後偵測到反向邊緣
+    EMBRAKER_LOCK_REASON_IBKS,          // 6 = 手剎車/充電中訊號 (硬夾)
+    EMBRAKER_LOCK_REASON_ROLLBACK_HOLD, // 7 = LOCKED 狀態下倒溜閂鎖保持鎖定
+    EMBRAKER_LOCK_REASON_FAULT,         // 8 = A04 IEMB 故障保持鎖定
+    EMBRAKER_LOCK_REASON_PRERUN_FAIL    // 9 = 運轉前檢查 IEMB 不合格
+} E_EMBRAKER_LOCK_REASON;
+
 // --- 硬體相關參數定義 ---
 
 // EM-Braker Input (IEMB) on Pin RD8
@@ -38,6 +57,17 @@ typedef enum {
 //  (1) UVW lock 生效後，經過 EMBRAKER_SHORT_TO_LOCK_DELAY_MS(可設定) → 強制鎖定 EMB。
 //      計時從「UVW lock 生效」起算。延遲長度應足夠讓馬達由 UVW 短路減速到完全停止，
 //      避免帶速鎖定造成騎乘震動。上機依實際停止時間微調。
+//      [V0.24] UVW lock 的進鎖條件是「油門目標歸零 且 HallPulsesLatch < UVW_LOCK_STOP_PULSES」
+//      (main.c 的 bUvwStopCommanded)。V0.23 以前看的是減速斜坡**後**的命令(ReferenceRAW)，
+//      比放油門晚了整條斜坡(最高速約 700~800ms)，而同樣看車速的 coast(PWM 全關)卻在放油門
+//      瞬間就成立 → 中間那段「PWM 全關、零制動」窗口會讓車在微傾斜路面潛行、latch 回不到
+//      門檻下 → UVW 永遠進不去 → 本準則整條失效，只剩 (3) 的 failsafe 帶速夾停(V0.23 實車
+//      回報的平地減速頓挫)。改用油門目標後低速區一律由三相短路接手。
+//      [V0.24] **speed mode 已完全取消 coast(PWM 全關)**，且 **EMB 夾住(LOCKED/FAULT)的全程
+//      UVW 短路保持生效**(main.c 的 bUvwEmbClamped)。因此煞車夾住期間馬達一定是短路狀態:
+//      靜止時零電流、被外力推動時提供與 EMB 同向的制動力、且結構上不可能被 FOC 驅動 ——
+//      連「倒溜閂鎖/段位 0 時駕駛握著油門」也不會讓馬達對著夾緊的煞車出力。
+//      PWM 全關只剩 RunMotor==0(含 IBKS/充電)、Fault 閂鎖、電池禁制三個系統理由。
 //  (2) [Plan B] 偵測到倒溜(反向霍爾邊緣) → 立即鎖定。
 //  (3) [failsafe] 速度命令(ReferenceRAW)歸零後超過 EMBRAKER_LOCK_TIMEOUT_MS 仍未由 UVW lock
 //      鎖定(例如霍爾異常導致 UVW lock 從未生效) → 強制鎖定,確保 EMB 不會永遠不鎖。
@@ -67,10 +97,14 @@ typedef enum {
 //      本判斷在「車剛開始滑動」時即鎖定,動能極小,不適感最低。
 //      偵測訊號由 main.c 產生後以 bDownhillSlideDetected 傳入,RELEASED 與 WAITING_TO_LOCK
 //      兩個狀態都檢查(理由同 (4))。判別方式與門檻見 userparms.h 的 EMB_DOWNHILL_*：
-//      「命令歸零 + 霍爾週期沒有變長(= 沒在減速) + 車速低於上限 + 位移達門檻」。
+//      「命令歸零 + 霍爾週期真的變短(= 車在加速) + 車速低於上限 + 位移達門檻」。
 //      ⚠ 自由滑行的阻力恆為正 ⇒ 平路與上坡的週期必然逐步變長,故本偵測在平路正常停車時
 //        結構上不成立 —— 這是它不再需要 V0.20 那個「武裝旗標」的原因(該旗標的解除門檻
 //        低於油門最低命令速度,反而讓功能整條失效,已移除)。
+//      [V0.24] 判準由「週期沒變長」改為「週期真的變短」。前者的隱含減速度門檻帶 v² 項
+//        (a_th = v²/(2^TOL_SHIFT x d_LOOKBACK))，在 3 km/h 上限附近只有 0.26 m/s²、低於平路
+//        自由滑行阻力的量級 → 平路在 2.6~3.0 km/h 這段其實會誤觸(而且走硬夾)。改成「必須
+//        變短」後,上面那句「平路結構上不成立」才真正成立於**所有車速**。
 // UVW lock 後延遲鎖定 EMB 的時間 (ms)，可設定。
 // [實車調校 2026-08-14] 50 → 150。50ms 時機械夾緊仍略早於車速真正到 0，停車瞬間有應力
 //   頓挫感;150ms 讓 UVW 短路有足夠時間把馬達帶到靜止再夾，實測頓挫消除。
@@ -110,7 +144,11 @@ typedef enum {
 //    最多可能滑動 ~80mm(仍在 1/4 車輪 = 159mm 規格內,但接近半數)。設 tick > 10 前
 //    請確認實際使用坡度不會超過此範圍。若需要更長 ramp 且安全,較好的作法是「ramp 期間
 //    保留偵測武裝」(尚未實作,可視需求規劃)。
-#define EMB_SOFT_CLAMP_TICKS 10
+//
+// [實車調校 2026-08-19] 10 → 5 (200ms → 100ms)。V0.23 實車回報:PWM 軟夾使上下坡的夾煞
+//   應力大幅下降、EMB 動作時不再有應力過大把前輪抬起的問題,而 100ms 已足夠削掉衝擊峰值,
+//   不需要 200ms 的延遲感。5 落在上面的推薦區間內,且遠低於「tick > 10」的注意事項門檻。
+#define EMB_SOFT_CLAMP_TICKS 5
 
 #if (EMB_SOFT_CLAMP_TICKS) > 20
 #error "EMB_SOFT_CLAMP_TICKS > 20 (>400ms): 陡坡倒溜可能違反 1/4 車輪規格,且 ramp 期間偵測已解武裝無保底 (見本註解與 main.c LOCK 分支)"
@@ -191,5 +229,11 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
  * @return E_EMBRAKER_STATE 目前的狀態
  */
 E_EMBRAKER_STATE logic_embraker_getStatus(void);
+
+/**
+ * @brief 獲取最後一次回傳 LOCK 的原因 (純診斷用，不參與控制)
+ * @return E_EMBRAKER_LOCK_REASON
+ */
+E_EMBRAKER_LOCK_REASON logic_embraker_getLastLockReason(void);
 
 #endif  // S_LOGIC_EMBRAKER_H_

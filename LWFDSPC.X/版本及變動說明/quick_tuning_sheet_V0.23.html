@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V0.23 EMB 與溜車調機速查表</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0; --accent:#4ea1ff;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1000px; margin:0 auto; padding:26px 18px 50px; }
+  h1 { font-size:1.55rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:15px 19px 19px; margin:0 0 16px; }
+  h2 { font-size:1.12rem; margin:0 0 9px; }
+  h2 .n { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.9rem;
+          margin-right:8px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:6px 0; font-size:.84rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.81rem; color:#ffd580; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0 0; font-size:.85rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:0 0 10px; font-size:.86rem; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.75rem; margin-right:5px; }
+  .foot { color:var(--muted); font-size:.78rem; text-align:center; margin-top:24px; }
+  @media print {
+    @page { size:A4; margin:7mm 8mm; }
+    :root { --bg:#fff; --card:#fff; --fg:#111; --muted:#555; --accent:#0b5cad;
+            --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:7.6pt; line-height:1.25; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:11.5pt; margin:0 0 1px; }
+    .sub { margin:0 0 4px; font-size:7pt; }
+    h2 { font-size:9pt; margin:0 0 3px; }
+    h2 .n { width:16px; height:16px; line-height:16px; font-size:7pt;
+            background:#0b5cad; color:#fff; margin-right:5px; }
+    .card { border:1px solid #b9c2cc; border-radius:5px; margin:0 0 4px; padding:5px 8px 6px;
+            break-inside:avoid; page-break-inside:avoid; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; padding:0 3px; font-size:6.8pt; }
+    table { font-size:6.6pt; margin:2px 0; } th,td { padding:2px 4px; }
+    th { background:#e6eef8 !important; font-size:6.6pt; }
+    tr,td,th { break-inside:avoid; }
+    td.val { color:#7a4b00; } td.f { color:#8a3a00; font-size:6.5pt; }
+    tr.hi td { background:#fffbe8 !important; }
+    .danger { background:#ffece9; border-left-color:#c0271a; padding:3px 7px;
+              margin:3px 0 0; font-size:6.8pt; border-left-width:3px; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; padding:3px 7px;
+          margin:0 0 3px; font-size:7pt; border-left-width:3px; }
+    .k { background:#ffd23f; color:#1a1200; font-size:6.4pt; padding:0 3px; }
+    .sub,.foot { color:#555; } .foot { margin-top:4px; font-size:6.4pt; }
+    p { margin:2px 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>V0.23 EMB 與溜車調機速查表</h1>
+  <p class="sub">LWFDSPC <b>V0.23</b> · 2026-08-17 · 全部為 <code>#define</code>,改完需重新編譯燒錄 · 檔案位置見各節</p>
+
+  <div class="card">
+    <h2><span class="n">1</span>V0.23 三項改動一覽</h2>
+    <div class="ok">V0.20 → V0.23 主要處理三個客戶回報症狀:上坡點放後強烈震動(PWM 極限循環)、
+      EMB 一次夾住時的機械衝擊(翹前輪/後輪)、上坡下滑偵測失效(V0.20 武裝旗標結構性錯誤)。</div>
+    <table>
+      <tr><th style="width:170px">改動</th><th style="width:250px">位置</th><th>做什麼</th></tr>
+      <tr><td><b>EMB 軟夾</b></td><td class="f">s_logic_embraker.h : EMB_SOFT_CLAMP_TICKS</td>
+        <td>EMB 由「瞬間鎖住」改為「PWM duty 100%→0% 漸降」,分散機械衝擊</td></tr>
+      <tr><td><b>下坡溜車偵測</b></td><td class="f">userparms.h : EMB_DOWNHILL_*</td>
+        <td>命令歸零 + 霍爾週期沒變長 = 車沒在減速 → 立即夾煞。26mm 內接手</td></tr>
+      <tr><td><b>上坡倒溜偵測</b></td><td class="f">userparms.h : EMB_ROLLBACK_REV_EDGES</td>
+        <td>改用排檔方向(F/R 開關)為參考,前進檔倒溜 28mm 內立即夾煞</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span>EMB 軟夾參數</h2>
+    <table>
+      <tr><th style="width:30px"></th><th style="width:250px">巨集</th><th style="width:88px">現值</th>
+          <th style="width:88px">範圍</th><th>意義</th></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_SOFT_CLAMP_TICKS</td>
+        <td class="val">10<br>(200 ms)</td><td class="c">0 ~ 20</td>
+        <td><b>軟夾時長,單位 20ms tick。</b>0 = 停用(等同瞬間夾)。愈大愈柔但延遲愈明顯。
+            <b>推薦 4~6 (80~120ms)</b>,實測 6 = 120ms 已驗證正確。>10 有陡坡風險(見紅框)</td></tr>
+      <tr><td></td><td class="f">EMBRAKER_SHORT_TO_LOCK_DELAY_MS</td>
+        <td class="val">150 ms</td><td class="c">50 ~ 300</td>
+        <td>停車 UVW 短路後、EMB 上鎖前的等待時間。愈長停車愈平順但空窗愈久。改這顆最安全</td></tr>
+    </table>
+    <div class="ok"><b>軟夾只用在正常停車路徑</b>(WAITING_TO_LOCK 走完 UVW 到期)。以下情境仍走硬夾(立即 0%):
+      IBKS 手煞、bMotorStop 系統禁制、有動力倒溜、下坡溜車 —— 這四種語意上或安全上不容延遲。</div>
+    <div class="danger"><b>⚠ EMB_SOFT_CLAMP_TICKS &gt; 10 的注意事項</b>:LOCK 觸發時倒溜/滑動偵測會**被解除武裝**,
+      ramp 期間偵測不再重新武裝。30% 陡坡上 400ms ramp 期間最多可能滑動 ~80mm(仍在 1/4 車輪
+      159mm 規格內但接近半數)。&gt; 20 tick 由編譯期 #error 擋下。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span>溜車偵測參數(下坡點放 + 上坡下滑)</h2>
+    <table>
+      <tr><th style="width:30px"></th><th style="width:250px">巨集</th><th style="width:88px">現值</th>
+          <th style="width:88px">範圍</th><th>意義</th></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_NODECEL_TOL_SHIFT</td>
+        <td class="val">6<br>(1.6%)</td><td class="c">5 ~ 7</td>
+        <td><b>下坡靈敏度</b>。週期變長不超過 1/2<sup>n</sup> 仍算「沒減速」。<br>
+            <b>5</b>(3.1%) = 更寬鬆 抓緩坡 · <b>7</b>(0.78%) = 更嚴格 不易誤鎖</td></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_MAX_SPEED_KMHX100</td>
+        <td class="val">300<br>(3 km/h)</td><td class="c">150 ~ 500</td>
+        <td><b>下坡夾煞車速上限</b>(km/h×100)。超過此車速本偵測不夾。嫌衝擊大可降到 250 (2.5km/h)</td></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_ROLLBACK_REV_EDGES</td>
+        <td class="val">16<br>(28 mm)</td><td class="c">8 ~ 45</td>
+        <td><b>上坡倒溜位移門檻</b>(邊緣數,1 邊緣 = 1.75mm)。上限硬性 91(1/4 車輪 = 159mm)<br>
+            愈小夾得愈早、動能愈小、翹前輪風險愈低;過小可能被抖動雜訊誤觸</td></tr>
+      <tr><td></td><td class="f">EMB_DOWNHILL_SLIDE_EDGES</td>
+        <td class="val">15<br>(26 mm)</td><td class="c">15 ~ 45</td>
+        <td>下坡位移門檻。<b>下限硬性 15</b> (= LOOKBACK+CONFIRM),設更小無效</td></tr>
+      <tr><td></td><td class="f">EMBRAKER_LOCK_TIMEOUT_MS</td>
+        <td class="val">1500 ms</td><td class="c">1000 ~ 3000</td>
+        <td>命令歸零後多久仍未夾住的 failsafe 逾時。<b>不要為舒適性調它</b>,那是保底</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span>症狀 → 調哪一顆</h2>
+    <table>
+      <tr><th style="width:320px">症狀</th><th>動作</th></tr>
+      <tr class="hi"><td>停車瞬間 EMB 上鎖有大震動 / 頓感</td>
+        <td>先加大 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 150→200~300;無效再加大
+            <code>EMB_SOFT_CLAMP_TICKS</code> 4→6→8</td></tr>
+      <tr class="hi"><td>下坡點放後滑很遠才夾</td>
+        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → <b>5</b> (更寬鬆抓緩坡)</td></tr>
+      <tr class="hi"><td>下坡夾煞時翹前輪 / 一次性強衝擊</td>
+        <td>加大 <code>EMB_SOFT_CLAMP_TICKS</code> 到 6~10;若仍翹則降低
+            <code>EMB_DOWNHILL_MAX_SPEED_KMHX100</code> 300 → 250</td></tr>
+      <tr class="hi"><td>上坡點放後倒溜距離過長 / 翹輪</td>
+        <td>縮小 <code>EMB_ROLLBACK_REV_EDGES</code> 16 → 12 → 8(愈小夾得愈早、動能愈小)</td></tr>
+      <tr><td>平路點放油門,煞車會咬住</td>
+        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → <b>7</b> (更嚴格);仍有則
+            <code>EMB_DOWNHILL_SLIDE_EDGES</code> 15 → 20 → 24</td></tr>
+      <tr><td>顛簸地面誤鎖</td>
+        <td><code>EMB_DOWNHILL_NODECEL_CONFIRM</code> 3 → 5</td></tr>
+      <tr><td>極緩坡(3~5%)仍慢慢溜</td>
+        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → 5(不危險,failsafe 會接手)</td></tr>
+    </table>
+    <div class="danger"><b>三件不要做</b>:① 不要重新引入 V0.20 的武裝旗標 <code>s_bEmbDownhillArmed</code>
+      (解除門檻低於油門最低命令 → 整條失效)　② 不要為舒適性給 <code>EMBRAKER_LOCK_TIMEOUT_MS</code>
+      加車速閘門(最後保底)　③ 不要把 <code>EMB_DOWNHILL_NODECEL_LOOKBACK</code> 設非 6 倍數
+      (霍爾裝配誤差會被誤判成加減速)</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">5</span>實車驗收(6 項)</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:220px">測試</th><th>合格標準</th></tr>
+      <tr class="hi"><td class="c">1</td><td>台架空輪 · 給油門 → 放油門</td>
+        <td>PWM 100% ↔ 0% 正常切換,無震動 · Coast 閂鎖能正常解閂</td></tr>
+      <tr class="hi"><td class="c">2</td><td>平路點放油門 ×10 次(室內定位)</td>
+        <td>不應咬住,停車手感自然</td></tr>
+      <tr class="hi"><td class="c">3</td><td>10% 坡 · 上坡點放</td>
+        <td>倒溜 2~4 cm 內夾住,<b>不應強烈震動</b> · 前輪不翹</td></tr>
+      <tr class="hi"><td class="c">4</td><td>10% 坡 · 下坡點放</td>
+        <td>下滑 2~3 cm 內夾住,<b>不應一次性強衝擊</b></td></tr>
+      <tr><td class="c">5</td><td>≥20% 陡坡 · 上坡點放</td>
+        <td>倒溜 &lt; 1/4 車輪(15.9 cm),絕不可掉到 1.5 秒 failsafe</td></tr>
+      <tr><td class="c">6</td><td>倒退檔運轉</td>
+        <td>加減速手感符合預期,段位 3 是預設曲線</td></tr>
+    </table>
+    <p style="margin:8px 0 0; font-size:.85rem">X2CScope 不可用,建議坡道貼尺標 + 手機錄影逐格看夾煞位置。
+       更詳細的下坡調校說明見 <code>downhill_slide_guide_V0.21.html</code>。</p>
+  </div>
+
+  <p class="foot">LWFDSPC V0.23 · 調機速查表 · 2026-08-17 · 坡度／位移／車速為理論估算,實際依實車</p>
+</div>
+</body>
+</html>

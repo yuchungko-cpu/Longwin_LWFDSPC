@@ -260,11 +260,13 @@ volatile int16_t g_i16EmbZeroCmdEdgeCnt = 0;
 // 讀取端見 CNRead_Inline 的計數邏輯與主迴圈的 bEmbRollbackDetected 合成。
 // 8-bit / bool 存取原子，不需臨界區。
 volatile bool g_bEmbRollbackArmed = false;
-// [下坡滑動] 「命令歸零後車沒有減速」的連續確認次數。CNRead_Inline 以霍爾週期比較累加，
+// [下坡滑動] 「命令歸零後車在加速」的連續確認次數。CNRead_Inline 以霍爾週期比較累加，
 // 20ms 的 EMB 任務讀取。自由滑行的阻力恆為正 → 平路與上坡的週期必然逐步變長，因此
-// 「週期沒變長」等價於「重力已抵銷全部阻力，車不會自己停」。這是唯一不依賴車速門檻、
+// 「週期真的變短」等價於「重力已超過全部阻力，車不會自己停」。這是唯一不依賴車速門檻、
 // 也不依賴跨迴圈狀態的判別，故它取代了 V0.20 的武裝旗標 (s_bEmbDownhillArmed，為何移除
 // 見 userparms.h 的 EMB_DOWNHILL_* 說明)。
+// ⚠ 名稱沿用 V0.21 的 NoDecel(當時判準是「週期沒變長」),語意已於 V0.24 改為「在加速」——
+//   舊判準的隱含減速度門檻帶 v² 項,在 3 km/h 附近會把平路自由滑行誤判成沒減速。
 // 車速上限閘門 (EMB_DOWNHILL_MIN_PERIOD) 也在 ISR 內一併判斷 —— 計數只在上限以下累加，
 // 因此「本計數達標」已內含「車速夠低、夾煞可接受」。
 // ⚠ 與上面兩個計數器同理：只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE
@@ -273,6 +275,21 @@ volatile uint8_t g_u8EmbNoDecelCnt = 0;
 // [e-lock] 助力段位 0 (電子鎖車) 是否作用中。1 = 段位 0，油門已被歸零且 EMB 不會放開。
 // 純觀測用 (X2CScope)，不參與任何控制判斷 —— 控制邏輯各自直接讀 u8AssistLevel。
 volatile uint8_t g_u8ELockActive = 0;
+// [EMB 夾煞診斷] 純觀測用 (X2CScope / debugger)，不參與任何控制判斷。
+// 實車無法即時觀測時，路試後保持通電接上 debugger 讀這幾顆即可判斷停車走的是哪條路徑：
+//   正常停車應該只有 g_u16EmbLockCntUvwDelay 在累加;
+//   g_u16EmbLockCntFailsafe > 0  ⇒ 停車鏈有路徑失效,被 1500ms 逾時帶速夾停;
+//   g_u16EmbLockCntDownhill > 0  ⇒ 下坡滑動偵測動作(平路不該出現);
+//   g_u16EmbLockCntRollback > 0  ⇒ 倒溜偵測動作。
+// 計數只在「進入 LOCK 的那一次」累加(保持鎖定的 tick 不重複計)，見 EMB LOCK 分支。
+volatile uint8_t  g_u8EmbLockReason = 0;        // 最後一次的原因碼 (E_EMBRAKER_LOCK_REASON)
+volatile int16_t  g_i16EmbLockPulses = 0;       // 夾煞當下的 HallPulsesLatch (邊緣/100ms)
+volatile uint16_t g_u16EmbLockPeriod = 0;       // 夾煞當下的 HallPeriod (Timer1 ticks)
+volatile uint16_t g_u16EmbLockCntUvwDelay = 0;  // 原因 1：正常停車 (UVW + 延遲)
+volatile uint16_t g_u16EmbLockCntFailsafe = 0;  // 原因 2：逾時 failsafe
+volatile uint16_t g_u16EmbLockCntDownhill = 0;  // 原因 3：下坡滑動
+volatile uint16_t g_u16EmbLockCntRollback = 0;  // 原因 4：有動力倒溜
+volatile uint16_t g_u16EmbLockCntOther = 0;     // 其餘 (Plan B / IBKS / 故障 / 運轉前檢查)
 const int16_t PhaseValues[8] = {0, 0, -21844, -10922, 21844, 10922, 32767, 0};
 signed int TempVar;     // main loop
 signed int Ibus = 0;     // 瞬時 DC bus 電流 (Q15，與 iabc 同刻度；313.3 counts/A)
@@ -1432,11 +1449,12 @@ int main(void) {
                                             !bEmbFlipHoldoff &&
                                             (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES);
 
-                // --- [下坡滑動] 命令歸零後車卻沒有在減速 → 立即上鎖 ---
+                // --- [下坡滑動] 命令歸零後車卻在加速 → 立即上鎖 ---
                 //   完整理由見 userparms.h 的 EMB_DOWNHILL_* 說明。三個閘門：
                 //     (1) 命令已歸零   —— g_i16EmbZeroCmdEdgeCnt 的計數閘門天然提供
-                //     (2) 車沒有減速   —— g_u8EmbNoDecelCnt (ISR 內比較霍爾週期有沒有變長;
-                //                        滑行阻力恆為正 ⇒ 沒變長就是重力已抵銷全部阻力)
+                //     (2) 車在加速     —— g_u8EmbNoDecelCnt (ISR 內比較霍爾週期有沒有變短;
+                //                        滑行阻力恆為正 ⇒ 變短就是重力已超過全部阻力。
+                //                        名稱沿用 V0.21 的 NoDecel，語意已於 V0.24 改掉)
                 //     (3) 車速低於上限 —— 同在 ISR 內，以週期下限實作，已內含於 (2) 的累加
                 //   此處只讀 ISR 的結果，再加位移門檻作為雜訊裕度。
                 //   ⚠ V0.20 的武裝旗標 (s_bEmbDownhillArmed) 已移除，**不要加回來**：它的
@@ -1483,6 +1501,13 @@ int main(void) {
                 //   立刻重鎖，車一個邊緣都沒動就被鎖死，而要扣掉計數又必須讓車動 → 卡死。
                 //   LOCK 清零 = 偵測已被執行，位移預算用掉;RELEASE 清零 = 每次放煞車都從零起算。
                 //   8-bit 寫入在 16-bit MCU 上為原子,且是單純覆寫(非讀改寫),與 ISR 無競態。
+                //
+                // [夾煞診斷] LOCK 的上升緣 —— FAULT 與倒溜閂鎖分支每個 20ms tick 都會回傳
+                //   LOCK(保持鎖定),診斷計數器只在第一次進 LOCK 時累加才有意義。
+                static bool s_bPrevEmbLockAction = false;
+                bool bEmbLockEdge = (eBrakeAction == EMBRAKER_ACTION_LOCK) && !s_bPrevEmbLockAction;
+                s_bPrevEmbLockAction = (eBrakeAction == EMBRAKER_ACTION_LOCK);
+
                 switch (eBrakeAction) {
                     case EMBRAKER_ACTION_LOCK:
 #if !CODESW_MOTOR_LOCK_TEST_ENABLE
@@ -1504,6 +1529,32 @@ int main(void) {
                             emb_pwm_hardLock();
                         } else {
                             emb_pwm_startSoftClamp(EMB_SOFT_CLAMP_TICKS);
+                        }
+                        // [夾煞診斷] 純觀測,不影響控制。只在 LOCK 的**上升緣**記錄(見上方
+                        //   bEmbLockEdge)：FAULT 與倒溜閂鎖那兩個分支每個 tick 都回傳 LOCK
+                        //   (保持鎖定),不擋掉會把計數器灌爆而失去診斷意義。
+                        E_EMBRAKER_LOCK_REASON eLockReason = logic_embraker_getLastLockReason();
+                        g_u8EmbLockReason = (uint8_t)eLockReason;
+                        if (bEmbLockEdge) {
+                            g_i16EmbLockPulses = HallPulsesLatch;  // 夾煞當下的車速
+                            g_u16EmbLockPeriod = HallPeriod;
+                            switch (eLockReason) {
+                                case EMBRAKER_LOCK_REASON_UVW_DELAY:
+                                    g_u16EmbLockCntUvwDelay++;
+                                    break;
+                                case EMBRAKER_LOCK_REASON_FAILSAFE:
+                                    g_u16EmbLockCntFailsafe++;
+                                    break;
+                                case EMBRAKER_LOCK_REASON_DOWNHILL:
+                                    g_u16EmbLockCntDownhill++;
+                                    break;
+                                case EMBRAKER_LOCK_REASON_ROLLBACK:
+                                    g_u16EmbLockCntRollback++;
+                                    break;
+                                default:
+                                    g_u16EmbLockCntOther++;
+                                    break;
+                            }
                         }
                         g_u8EmbRevEdgeCnt = 0;
                         // [有動力倒溜] EMB 已上鎖 → 解除武裝。煞車夾住後車不該再動,
@@ -2186,7 +2237,9 @@ void DoControl(void) {
             if (bThrottleReleased && !s_bPrevThrottleReleased) {
                 piInputOmega.piState.integrator = 0;  // 速度環:每次放開都清(消前進 creep)
                 // 註:電流環積分器不在此清(有速度放開會造成扭力瞬斷/抖動)。頂牆放開的反向
-                //   驅動改由輸出級「近停放開強制 coast」處理(見下方 bStallReleaseCoast)。
+                //   驅動由 UVW 三相短路處理 —— 放油門且近停即進鎖,PWM 被 override 成下橋全開,
+                //   FOC 的輸出到不了馬達 (V0.24 前是靠輸出級的 bStallReleaseCoast 關 PWM,
+                //   見下方 PWM 輸出分支的「已移除」說明)。
             }
             s_bPrevThrottleReleased = bThrottleReleased;
         }
@@ -2237,18 +2290,49 @@ void DoControl(void) {
         //   尖峰免疫；單邊界顫動的淨脈衝數很低，真正滑行才會高，剛好能區分。
         //   用專屬門檻 UVW_LOCK_STOP_PULSES 作為「已接近靜止」判斷 (獨立於 ReGen 的
         //   BrakeStopSpeedPulses，調整不會影響 ReGen 起煞點)。
-        bool bUvwStopCommanded = (ReferenceRAW == 0) &&
-                                 (ctrlParm.qVelRef == 0) &&
+        // [FIX 2026-08-19] 進鎖的命令條件由「斜坡後的命令」(ReferenceRAW/qVelRef == 0) 改為
+        //   「油門目標」(i16TargetRpm == 0)，與出鎖條件 bUvwDriveRequested 統一成**同一個訊號
+        //   的遲滯對** (0 進鎖 / >= UVW_LOCK_RELEASE_REF 出鎖)。車速門檻完全不動。
+        //   [為何] 舊寫法讓進鎖比「放油門」晚了整條減速斜坡 (曲線 2 從最高速約 700~800ms)，
+        //   而同樣看車速的 coast(PWM 全關) 卻是放油門瞬間就成立 → 兩者之間出現一段
+        //   「PWM 全關、零制動」的窗口。車若在該窗口因路面微傾斜或殘餘動量以 0.2~0.5 km/h
+        //   潛行,HallPulsesLatch 就回不到門檻以下 → UVW 永遠進不去 → V0.23 起 coast 是閂鎖
+        //   也出不來 → 只剩 EMB 的 1500ms failsafe 帶速夾停。實車症狀:「平地放油門減速，
+        //   UVW lock 有時未啟動、車子繼續低速前進，最後被 EMB 夾停而震動」。
+        //   改用油門目標後,低速區一律由三相短路接手 (有制動力、且結構上不可能驅動馬達)，
+        //   speed mode 不再需要也不再有 PWM 全關狀態 —— bStallReleaseCoast 因此一併移除
+        //   (見下方 PWM 輸出分支的說明)。
+        //   附帶效果:堵轉/頂牆放油門時 (命令很大、latch=0) 也會立即進短路,那正是舊
+        //   bStallReleaseCoast 要守的空窗。
+        bool bUvwStopCommanded = (g_stSystemData.i16TargetRpm == 0) &&
                                  (HallPulsesLatch < UVW_LOCK_STOP_PULSES);
         bool bUvwDriveRequested = (abs(g_stSystemData.i16TargetRpm) >= UVW_LOCK_RELEASE_REF);
 
+        // [V0.24] **EMB 機械上夾住時，UVW 短路一律保持生效** —— 煞車夾住的期間馬達沒有任何
+        //   理由被 FOC 驅動,也沒有理由浮接:
+        //     (1) 短路在靜止時零電流(制動扭矩 ∝ 反電動勢 ∝ 轉速)，不耗電不發熱;
+        //     (2) 車若被外力推動,短路立刻提供制動力,和 EMB 同方向;
+        //     (3) 結構上不可能驅動馬達 → 取代舊 coast(浮接)所有的保護職責。
+        //   包含 LOCKED 與 FAULT(A04) 兩種夾住狀態。**進鎖不看車速門檻** —— EMB 已經夾住,
+        //   車速的顧慮由夾煞路徑自己負責(見 s_logic_embraker.h 的動作準則)。
+        //   **出鎖也被它擋住**:倒溜閂鎖或段位 0 時駕駛握著油門,EMB 仍夾住,此時放行 FOC 只會
+        //   讓馬達對著夾緊的煞車出力(堵轉發熱)。EMB 一放開(RELEASED)本旗標即消失,
+        //   同一個 tick 內 bUvwDriveRequested 就會解鎖,加速反應不受影響。
+#if CODESW_EMBRAKER_ENABLE
+        E_EMBRAKER_STATE eUvwEmbState = logic_embraker_getStatus();
+        bool bUvwEmbClamped = (eUvwEmbState == EMBRAKER_STATE_LOCKED) ||
+                              (eUvwEmbState == EMBRAKER_STATE_FAULT);
+#else
+        bool bUvwEmbClamped = false;
+#endif
+
         if (uGF.UVWLock == 1) {
-            // 已鎖定：維持到駕駛重新給出明顯油門(遲滯)
-            if (bUvwDriveRequested) {
+            // 已鎖定：維持到駕駛重新給出明顯油門(遲滯)，但 EMB 還夾著就不放
+            if (bUvwDriveRequested && !bUvwEmbClamped) {
                 uGF.UVWLock = 0;
             }
-        } else if (bUvwStopCommanded && !bUvwDriveRequested) {
-            // 命令歸零且低速：立即進鎖 (已移除 30ms debounce)
+        } else if ((bUvwStopCommanded && !bUvwDriveRequested) || bUvwEmbClamped) {
+            // 命令歸零且低速 (已移除 30ms debounce)，或 EMB 已夾住：立即進鎖
             uGF.UVWLock = 1;
         }
 #else
@@ -2577,46 +2661,41 @@ void DoControl(void) {
         //        pwmDutycycle.dutycycle3 = MIN_DUTY;
         //    }
 
-        // [A] 頂牆/堵轉放開後,近停且尚未 UVW 短路時,強制 coast(關 PWM)不讓 FOC 主動輸出,
-        //   避免「零速→反向」交界的換相把馬達往後主動驅動(runaway 後退 1m+)。UVW lock 一armed
-        //   即由下方短路分支接手保持。只在速度模式、油門已放開、且近停時作用 → 不影響有速度時的煞車。
+        // [設計準則 2026-08-19] **speed mode 不使用 coast(PWM 全關)**：
+        //   馬達只有兩種通電狀態 —— (1) FOC 以 reference 0 制動 / 驅動、(2) UVW 三相短路。
+        //   低速段(HallPulsesLatch < UVW_LOCK_STOP_PULSES)與**EMB 夾住的全程**一律是 (2)。
+        //   PWM 全關只剩三個系統層面的理由,全部與停車路徑無關:
+        //     (1) uGF.RunMotor == 0  未運轉 —— 含 IBKS(手剎車/充電中)按下,充電時不可短路;
+        //     (2) uGF.Fault == 1     故障閂鎖(過流/霍爾異常/60 秒堵轉) —— 故障的橋不該短路;
+        //     (3) 電池模組輸出禁制   過壓/低壓保護。
+        //   [已退役:uGF.Coast] 它原本讓 bMotorStop(電池/過溫)、VR 讀取失敗、堵轉歸零、
+        //     以及「EMB 已夾住且油門為 0」都走 PWM 全關。這些情境的共同需求是「馬達不要出力」,
+        //     而三相短路同樣滿足(結構上不可能驅動馬達),還多了制動力與明確的橋狀態,
+        //     因此不再需要浮接。命令歸零的動作(MotorStallForceOutputZero 等)全部保留;
+        //     旗標本身仍在 control2.h(見該處註解),但**已無任何讀取者**。
+        //   ⚠ 本設計**依賴 CODESW_UVW_LOCK_ENABLE == 1**:短路分支是「馬達不要出力」的唯一
+        //     實作者。若為了除錯把 UVW lock 關掉,停車與各保護路徑就只剩「命令歸零」一層
+        //     (FOC 仍在通電),請自行評估風險或暫時把 uGF.Coast 加回本判斷式。
         //
-        // [實車問題 2026-08-14] 上坡點放油門會先「強烈震動」再滑行 —— 根因是本條件的
-        //   `HallPulsesLatch < UVW_LOCK_STOP_PULSES` **沒有遲滯**,在坡上會形成極限循環:
-        //     近停 → coast 進入(PWM 關,三個積分器清零) → 重力自由拉動車子加速
-        //       → 100ms 後 latch >= 4 → coast 退出(PWM 開) → FOC 以 reference 0 恢復,
-        //         車在倒退故誤差 = 0-(-v) = +v → 正向扭矩把車推回 → latch < 4 → 回到開頭
-        //   HallPulsesLatch 每 100ms 才更新,故這是約 5~10 Hz 的機械振盪;而且每次進 coast
-        //   都清零三個積分器,扭矩與電流都是階躍 → 震動很明顯。
-        //   平路不會發生:車單調減速到停,latch 掉到門檻下就待在那裡,coast 只進一次,
-        //   隨後 UVW lock(同一個門檻)latch 上由三相短路接手。上坡則是重力持續把 latch 推回
-        //   門檻上 → coast 反覆進出,**且 UVW lock 也永遠 latch 不上**,整條停車鏈同時失效。
-        //
-        //   → 改為**閂鎖**:一旦「放油門且近停」成立就維持 coast,直到
-        //     (a) 駕駛重新給油門 → 解閂,恢復正常驅動;或
-        //     (b) UVW lock latch 上 → 由下方三相短路分支接手(本旗標被 UVWLock==0 遮蔽);或
-        //     (c) EMB 夾住 → 車不再動,由機械煞車保持。
-        //   閂鎖後 PWM 不再開關,震動消失;車自由滑行的霍爾週期單調縮短,反而讓下坡/倒溜
-        //   偵測(EMB_DOWNHILL_*)更快更確定地在 26mm 處夾住 EMB。原本要防的「零速↔反向換相
-        //   往後驅動」保護不但保留,還維持得更久。
-        //   ⚠ 代價:震動期間 FOC 原有的間歇制動作用消失,倒溜會略快一點 —— 但 EMB 會在
-        //     26mm 處接手,總倒溜量仍遠小於改動前(靠 1s failsafe 時約 50cm)。
-        static bool s_bCoastLatched = false;
-        if (g_stSystemData.i16TargetRpm != 0) {
-            s_bCoastLatched = false;  // (a) 重新給油門 → 解閂
-        } else if ((uGF.UVWLock == 0) &&
-                   (HallPulsesLatch < UVW_LOCK_STOP_PULSES)) {
-            s_bCoastLatched = true;   // 放油門且近停 → 進閂 (之後不再看 latch)
-        }
-        bool bStallReleaseCoast = (uGF.CtrlMode == 0) &&
-                                  (g_stSystemData.i16TargetRpm == 0) &&
-                                  (uGF.UVWLock == 0) &&
-                                  s_bCoastLatched;
+        // [已移除:bStallReleaseCoast / s_bCoastLatched]
+        //   舊機制:「頂牆/堵轉放開後,近停且尚未 UVW 短路時,強制關 PWM 不讓 FOC 主動輸出」,
+        //   V0.23 又為了修上坡震動(coast 反覆進出造成 5~10Hz 扭矩階躍)把它改成閂鎖。
+        //   它守的那個空窗之所以存在,是因為 UVW 進鎖看的是**斜坡後的命令**(ReferenceRAW),
+        //   堵轉/放油門時命令要走完整條斜坡才歸零,而 coast 看的是**油門目標**(立刻歸零)。
+        //   V0.24 把 UVW 進鎖改看油門目標後(見上方 bUvwStopCommanded 的說明):
+        //     - 空窗消失,低速區改由三相短路占據 —— 短路結構上不可能驅動馬達,又有制動力,
+        //       比全關浮接更強,原本要防的「零速↔反向換相往後驅動」保護只增不減;
+        //     - 上坡震動的機制(coast 進出)整條不存在,不需要閂鎖;
+        //     - V0.23 閂鎖帶來的副作用一併消失:平路潛行時 coast 閂住 → 零制動 → latch 回不到
+        //       門檻下 → UVW 進不去也出不來 → 只剩 1500ms failsafe 帶速夾停(實車回報的
+        //       平地減速頓挫)。
+        //   其根因(HallPeriod <= HallMinPeriod 時把 Speed 誤斷言成 32767)已於 2026-08-11
+        //   在 CNRead_Inline 修掉(見該處註解),本移除即該註解所說的「等實車驗證過再談」。
 #if CODESW_BATTERY_PROTECTION_MODULE_ENABLE
         // 使用 s_logic_battery 模組的輸出禁制旗標來決定是否關閉 PWM
-        if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast || logic_battery_shouldProhibitOutput()) {
+        if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || logic_battery_shouldProhibitOutput()) {
 #else
-    if ((uGF.RunMotor == 0) || (uGF.Fault == 1) || (uGF.Coast == 1) || bStallReleaseCoast) {
+    if ((uGF.RunMotor == 0) || (uGF.Fault == 1)) {
 #endif
             HAL_MC1PWMDisableOutputs();
             piInputOmega.piState.integrator = 0;
@@ -2973,8 +3052,10 @@ void DoControl(void) {
             //       → 釋放計數器 500ms 後把 faultMotorStall.counter 歸零 → 顫動時堵轉計數
             //       永遠累積不到 8 秒 → 電流砍半與 60 秒閂鎖都不啟動。此條尚未實車確認。
             //
-            //   ⚠ (1)(2) 的圍堵措施(bStallReleaseCoast、UVW_LOCK_STOP_PULSES)**刻意保留**
-            //     作為縱深防禦,不要因為本修法就一併簡化 —— 等實車驗證過再談。
+            //   [2026-08-19 更新] (1) 的圍堵措施 bStallReleaseCoast 已移除 —— 那個「近停但
+            //     UVW 還沒短路」的空窗來自 UVW 進鎖看錯訊號(等斜坡後的命令),進鎖改看油門目標
+            //     後空窗消失,低速區改由三相短路占據(結構上不可能驅動馬達,保護只增不減)。
+            //     UVW_LOCK_STOP_PULSES 仍保留為「已接近靜止」的判斷門檻。
             if ((HallPeriodFiltered > HallMinPeriod) && (T1INTCnt == 0)) {
                 Speed = __builtin_divf(HallMinPeriod, HallPeriodFiltered);
             }
@@ -3045,11 +3126,12 @@ void DoControl(void) {
             //   符號慣例沿用上方 Speed 那行：Direction == DirectionDefault ⇒ 往負方向滾。
             //   飽和在 ±32000 而非讓它回捲 —— 回捲會讓 |cnt| 掃過 0 而漏掉已達標的位移。
             //
-            //   同一個閘門下並行「沒有減速判別 + 車速上限」，產出 g_u8EmbNoDecelCnt：
-            //   自由滑行的阻力恆為正 ⇒ 平路/上坡的霍爾週期必然逐步變長，「沒變長」就代表
-            //   重力已抵銷全部阻力、車不會自己停。這是區分「平路正常滑行到停」與「下坡
-            //   溜車」的唯一物理依據，且門檻只需贏過量測雜訊，與坡度陡緩無關
-            //   (完整理由與參數取值見 userparms.h 的 EMB_DOWNHILL_* 說明)。
+            //   同一個閘門下並行「車在加速判別 + 車速上限」，產出 g_u8EmbNoDecelCnt
+            //   (名稱沿用 V0.21 的 NoDecel，語意已於 V0.24 改為「在加速」)：
+            //   自由滑行的阻力恆為正 ⇒ 平路/上坡的霍爾週期必然逐步變長，「週期變短」就代表
+            //   重力已超過全部阻力、車不會自己停。這是區分「平路正常滑行到停」與「下坡
+            //   溜車」的唯一物理依據，且此推論不含車速項 —— 平路/上坡在任何車速、任何阻力下
+            //   都不可能觸發 (完整理由與參數取值見 userparms.h 的 EMB_DOWNHILL_* 說明)。
             {
                 // 相隔 EMB_DOWNHILL_NODECEL_LOOKBACK 個邊緣的週期環形緩衝。取 6 的倍數使
                 //   比較的兩筆是同一組霍爾狀態轉換，感測器裝配不等距的誤差因此對消。
@@ -3083,16 +3165,21 @@ void DoControl(void) {
                         if (su8EmbPeriodFill < EMB_DOWNHILL_NODECEL_LOOKBACK) {
                             su8EmbPeriodFill++;  // 緩衝未滿，還沒有可比較的對象
                         } else if ((HallPeriod > EMB_DOWNHILL_MIN_PERIOD) &&
-                                   ((HallPeriod <= u16Old) ||
-                                    ((uint16_t)(HallPeriod - u16Old) <=
-                                     (uint16_t)(u16Old >> EMB_DOWNHILL_NODECEL_TOL_SHIFT)))) {
-                            // 週期沒有變長(容忍雜訊 1/2^TOL_SHIFT) = 沒在減速 = 重力已抵銷
-                            //   全部阻力,車不會自己停;且車速仍在夾煞可接受的上限以下
-                            //   (週期下限 = 速度上限;上限之上交回 UVW 短路/回充處理)。
-                            // ⚠ 寫成「差值 <= 容忍」而非「HallPeriod <= u16Old + 容忍」:
-                            //   後者在 16-bit 上會溢位 (u16Old > 61680,即 0.16 km/h 以下),
-                            //   使門檻回捲成極小值 → 該速度帶靜默失效。先比大小再相減即可
-                            //   全程留在 16-bit 且不可能溢位 (與倒溜計數同一個寫法紀律)。
+                                   (u16Old > HallPeriod) &&
+                                   ((uint16_t)(u16Old - HallPeriod) >=
+                                    (uint16_t)(u16Old >> EMB_DOWNHILL_NODECEL_TOL_SHIFT))) {
+                            // [V0.24] 週期**真的變短**(超過雜訊裕度 1/2^TOL_SHIFT) = 車在加速
+                            //   = 重力已超過全部阻力,車不會自己停;且車速仍在夾煞可接受的
+                            //   上限以下(週期下限 = 速度上限;上限之上交回 UVW 短路/回充處理)。
+                            // ⚠ 不要改回舊版的「週期沒變長就算沒減速」:那個判準的隱含減速度
+                            //   門檻是 a_th = v²/(2^S x d_LOOKBACK),帶 v² 項 → 車速愈高愈鬆,
+                            //   在 3 km/h 上限附近只有 0.26 m/s²,低於平路自由滑行阻力的量級
+                            //   → 平路 2.6~3.0 km/h 這段會被判成「沒減速」而硬夾(V0.23 實車
+                            //   回報的平地減速頓挫)。改成「必須變短」後判準只剩重力 vs 阻力,
+                            //   平路/上坡在任何車速下結構上都不可能觸發。完整推導見 userparms.h。
+                            // ⚠ 寫成「先比大小再相減」而非「HallPeriod <= u16Old - 容忍」:
+                            //   後者在 16-bit 上會下溢 → 門檻回捲成極大值 → 該速度帶靜默失效。
+                            //   本寫法全程留在 16-bit 且不可能溢位(與倒溜計數同一個紀律)。
                             if (g_u8EmbNoDecelCnt < 255u) {
                                 g_u8EmbNoDecelCnt++;
                             }

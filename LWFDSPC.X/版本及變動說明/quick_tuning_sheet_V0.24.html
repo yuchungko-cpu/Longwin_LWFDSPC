@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V0.24 EMB 與溜車調機速查表</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0; --accent:#4ea1ff;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1000px; margin:0 auto; padding:26px 18px 50px; }
+  h1 { font-size:1.55rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:15px 19px 19px; margin:0 0 16px; }
+  h2 { font-size:1.12rem; margin:0 0 9px; }
+  h2 .n { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.9rem;
+          margin-right:8px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:6px 0; font-size:.84rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.81rem; color:#ffd580; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0 0; font-size:.85rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:0 0 10px; font-size:.86rem; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.75rem; margin-right:5px; }
+  .foot { color:var(--muted); font-size:.78rem; text-align:center; margin-top:24px; }
+  @media print {
+    @page { size:A4; margin:7mm 8mm; }
+    :root { --bg:#fff; --card:#fff; --fg:#111; --muted:#555; --accent:#0b5cad;
+            --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:7.6pt; line-height:1.25; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:11.5pt; margin:0 0 1px; }
+    .sub { margin:0 0 4px; font-size:7pt; }
+    h2 { font-size:9pt; margin:0 0 3px; }
+    h2 .n { width:16px; height:16px; line-height:16px; font-size:7pt;
+            background:#0b5cad; color:#fff; margin-right:5px; }
+    .card { border:1px solid #b9c2cc; border-radius:5px; margin:0 0 4px; padding:5px 8px 6px;
+            break-inside:avoid; page-break-inside:avoid; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; padding:0 3px; font-size:6.8pt; }
+    table { font-size:6.6pt; margin:2px 0; } th,td { padding:2px 4px; }
+    th { background:#e6eef8 !important; font-size:6.6pt; }
+    tr,td,th { break-inside:avoid; }
+    td.val { color:#7a4b00; } td.f { color:#8a3a00; font-size:6.5pt; }
+    tr.hi td { background:#fffbe8 !important; }
+    .danger { background:#ffece9; border-left-color:#c0271a; padding:3px 7px;
+              margin:3px 0 0; font-size:6.8pt; border-left-width:3px; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; padding:3px 7px;
+          margin:0 0 3px; font-size:7pt; border-left-width:3px; }
+    .k { background:#ffd23f; color:#1a1200; font-size:6.4pt; padding:0 3px; }
+    .sub,.foot { color:#555; } .foot { margin-top:4px; font-size:6.4pt; }
+    p { margin:2px 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>V0.24 EMB 與溜車調機速查表</h1>
+  <p class="sub">LWFDSPC <b>V0.24</b> · 2026-08-19 · 全部為 <code>#define</code>,改完需重新編譯燒錄 · 檔案位置見各節</p>
+
+  <div class="card">
+    <h2><span class="n">1</span>V0.24 改動一覽</h2>
+    <div class="ok">V0.24 處理 V0.23 實車回報的第 3 項:<b>平地放油門減速有時明顯頓挫</b> ——
+      根因是「近停時 UVW 短路進不去、系統停在 PWM 全關(零制動)」,車繼續低速潛行到 1.5 秒
+      failsafe 才被帶速夾停。同時把三個實車驗證值落地,並修掉下坡偵測在平路的速度相關誤判。</div>
+    <table>
+      <tr><th style="width:170px">改動</th><th style="width:250px">位置</th><th>做什麼</th></tr>
+      <tr><td><b>UVW 進鎖時機</b></td><td class="f">main.c : bUvwStopCommanded</td>
+        <td>進鎖條件由「減速斜坡後的命令歸零」改為「<b>油門目標歸零</b>」,與出鎖條件同一訊號。
+            車速門檻不變(仍 0.25 km/h)。低速區一律由三相短路接手</td></tr>
+      <tr><td><b>完全取消 coast</b></td><td class="f">main.c : PWM 輸出分支<br>(bStallReleaseCoast / uGF.Coast)</td>
+        <td>speed mode 不再有 PWM 全關(浮接)狀態。馬達只有兩態:<b>FOC 通電 → UVW 三相短路</b>。<br>
+            PWM 全關只剩三個系統理由:<code>RunMotor==0</code>(含 IBKS/充電中)、
+            <code>Fault</code> 閂鎖、電池禁制</td></tr>
+      <tr><td><b>EMB 夾住時保持短路</b></td><td class="f">main.c : bUvwEmbClamped</td>
+        <td>EMB 在 LOCKED / FAULT 的<b>全程</b>維持 UVW 短路:靜止時零電流、被外力推動時提供
+            與 EMB 同向的制動力、且不可能被 FOC 驅動。連「倒溜閂鎖/段位 0 時握著油門」
+            也不會讓馬達對著夾緊的煞車出力(免堵轉發熱)</td></tr>
+      <tr><td><b>下坡判準</b></td><td class="f">userparms.h : EMB_DOWNHILL_NODECEL_*</td>
+        <td>由「週期沒變長 = 沒減速」改為「<b>週期必須真的變短 = 車在加速</b>」。
+            平路在任何車速下結構上都不可能誤觸(舊判準在 3 km/h 附近會)</td></tr>
+      <tr><td><b>夾煞原因觀測</b></td><td class="f">main.c : g_u8EmbLockReason 等</td>
+        <td>新增純觀測變數與各原因計數器,事後接 debugger 即可知道停車是走哪條路徑夾的</td></tr>
+    </table>
+    <div class="ok" style="margin-top:10px">V0.23 三項改動(EMB PWM 軟夾、上坡震動修正、倒溜改用排檔方向)全部保留,
+      詳見 <code>quick_tuning_sheet_V0.23.html</code>。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span>EMB 軟夾參數</h2>
+    <table>
+      <tr><th style="width:30px"></th><th style="width:250px">巨集</th><th style="width:88px">現值</th>
+          <th style="width:88px">範圍</th><th>意義</th></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_SOFT_CLAMP_TICKS</td>
+        <td class="val">5<br>(100 ms)</td><td class="c">0 ~ 20</td>
+        <td><b>軟夾時長,單位 20ms tick。</b>0 = 停用(等同瞬間夾)。愈大愈柔但延遲愈明顯。
+            <b>實車驗證值 5 = 100ms</b>(2026-08-19):上下坡夾煞應力大幅下降、不再翹前輪,
+            且無延遲感。>10 有陡坡風險(見紅框)</td></tr>
+      <tr><td></td><td class="f">EMBRAKER_SHORT_TO_LOCK_DELAY_MS</td>
+        <td class="val">150 ms</td><td class="c">50 ~ 300</td>
+        <td>停車 UVW 短路後、EMB 上鎖前的等待時間。愈長停車愈平順但空窗愈久。改這顆最安全</td></tr>
+    </table>
+    <div class="ok"><b>軟夾只用在正常停車路徑</b>(WAITING_TO_LOCK 走完 UVW 到期)。以下情境仍走硬夾(立即 0%):
+      IBKS 手煞、bMotorStop 系統禁制、有動力倒溜、下坡溜車 —— 這四種語意上或安全上不容延遲。</div>
+    <div class="danger"><b>⚠ EMB_SOFT_CLAMP_TICKS &gt; 10 的注意事項</b>:LOCK 觸發時倒溜/滑動偵測會**被解除武裝**,
+      ramp 期間偵測不再重新武裝。30% 陡坡上 400ms ramp 期間最多可能滑動 ~80mm(仍在 1/4 車輪
+      159mm 規格內但接近半數)。&gt; 20 tick 由編譯期 #error 擋下。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span>溜車偵測參數(下坡點放 + 上坡下滑)</h2>
+    <table>
+      <tr><th style="width:30px"></th><th style="width:250px">巨集</th><th style="width:88px">現值</th>
+          <th style="width:88px">範圍</th><th>意義</th></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_NODECEL_TOL_SHIFT</td>
+        <td class="val">6<br>(1.6%)</td><td class="c">5 ~ 7</td>
+        <td><b>下坡靈敏度</b>。週期必須比 LOOKBACK 個邊緣前<b>短 1/2<sup>n</sup> 以上</b>才算車在加速。<br>
+            <b>7</b>(0.78%) = 裕度小 更靈敏 抓更緩的坡 · <b>5</b>(3.1%) = 裕度大 更保守<br>
+            <span style="color:var(--warn)">⚠ V0.24 起方向與舊版相反</span>(舊版是「容忍變長」)。
+            平路誤鎖已由判準本身結構上排除,本值不再是防誤鎖的旋鈕</td></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_MAX_SPEED_KMHX100</td>
+        <td class="val">300<br>(3 km/h)</td><td class="c">150 ~ 500</td>
+        <td><b>下坡夾煞車速上限</b>(km/h×100)。超過此車速本偵測不夾。嫌衝擊大可降到 250 (2.5km/h)</td></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_ROLLBACK_REV_EDGES</td>
+        <td class="val">24<br>(42 mm)</td><td class="c">8 ~ 45</td>
+        <td><b>上坡倒溜位移門檻</b>(邊緣數,1 邊緣 = 1.75mm)。上限硬性 91(1/4 車輪 = 159mm)<br>
+            愈小夾得愈早、動能愈小、翹前輪風險愈低;<b>過小會讓上坡起步被誤鎖</b><br>
+            <b>實車驗證值 24 = 42mm</b>(2026-08-19):16 時上坡起步有時會下滑鎖住</td></tr>
+      <tr><td></td><td class="f">EMB_DOWNHILL_SLIDE_EDGES</td>
+        <td class="val">27<br>(47 mm)</td><td class="c">27 ~ 45</td>
+        <td>下坡位移門檻,<b>推導值</b> = LOOKBACK + CONFIRM = 24+3,設更小無效。<br>
+            LOOKBACK 由 12 改為 24(實車驗證:12 時上坡容易鎖住)後自動由 15 變 27</td></tr>
+      <tr><td></td><td class="f">EMBRAKER_LOCK_TIMEOUT_MS</td>
+        <td class="val">1500 ms</td><td class="c">1000 ~ 3000</td>
+        <td>命令歸零後多久仍未夾住的 failsafe 逾時。<b>不要為舒適性調它</b>,那是保底</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span>症狀 → 調哪一顆</h2>
+    <table>
+      <tr><th style="width:320px">症狀</th><th>動作</th></tr>
+      <tr class="hi"><td>停車瞬間 EMB 上鎖有大震動 / 頓感</td>
+        <td>先加大 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 150→200~300;無效再加大
+            <code>EMB_SOFT_CLAMP_TICKS</code> 5→6→8</td></tr>
+      <tr class="hi"><td>下坡點放後滑很遠才夾</td>
+        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → <b>7</b> (裕度變小、更靈敏)<br>
+            <span style="color:var(--warn)">⚠ V0.24 起方向與 V0.23 速查表相反</span></td></tr>
+      <tr class="hi"><td>下坡夾煞時翹前輪 / 一次性強衝擊</td>
+        <td>加大 <code>EMB_SOFT_CLAMP_TICKS</code> 到 6~10;若仍翹則降低
+            <code>EMB_DOWNHILL_MAX_SPEED_KMHX100</code> 300 → 250</td></tr>
+      <tr class="hi"><td>上坡點放後倒溜距離過長 / 翹輪</td>
+        <td>縮小 <code>EMB_ROLLBACK_REV_EDGES</code> 16 → 12 → 8(愈小夾得愈早、動能愈小)</td></tr>
+      <tr><td>平路點放油門,煞車會咬住</td>
+        <td>V0.24 起下坡偵測在平路<b>結構上不可能觸發</b>,不要再調 TOL_SHIFT。<br>
+            請改讀 <code>g_u8EmbLockReason</code>:2 = 逾時 failsafe(停車鏈有路徑失效)、
+            3 = 下坡偵測、4 = 倒溜。把讀到的值回報,不要靠調參數掩蓋</td></tr>
+      <tr><td>顛簸地面誤鎖</td>
+        <td><code>EMB_DOWNHILL_NODECEL_CONFIRM</code> 3 → 5</td></tr>
+      <tr><td>極緩坡(2~3%)仍慢慢溜</td>
+        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → 7(裕度變小、更靈敏)。<br>
+            坡度恰與阻力打平時車是<b>等速</b>滑行、週期不變短,本偵測按設計不動作,
+            由 1.5 秒 failsafe 接手(車速約 1 km/h,衝擊小)</td></tr>
+    </table>
+    <div class="danger"><b>四件不要做</b>:① 不要重新引入 V0.20 的武裝旗標 <code>s_bEmbDownhillArmed</code>
+      (解除門檻低於油門最低命令 → 整條失效)　② 不要為舒適性給 <code>EMBRAKER_LOCK_TIMEOUT_MS</code>
+      加車速閘門(最後保底)　③ 不要把 <code>EMB_DOWNHILL_NODECEL_LOOKBACK</code> 設非 6 倍數
+      (霍爾裝配誤差會被誤判成加減速;V0.24 起有編譯期 #error 擋)　④ 不要把下坡判準改回
+      「週期沒變長就算沒減速」——那個判準的隱含減速度門檻帶 v² 項,在 3 km/h 附近會把平路自由
+      滑行誤判成沒減速而硬夾(即 V0.23 平地頓挫的其中一條路徑)</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">5</span>實車驗收(9 項)</h2>
+    <table>
+      <tr><th style="width:36px">#</th><th style="width:220px">測試</th><th>合格標準</th></tr>
+      <tr class="hi"><td class="c">1</td><td>台架空輪 · 給油門 → 放油門(X2CScope)</td>
+        <td><b>停車過程不應出現三相全關(浮接)</b> · <code>uGF.UVWLock</code> 在
+            <code>HallPulsesLatch</code> &lt; 4 當下就進鎖 · 夾煞後 <b>UVWLock 保持 1</b>(不歸零) ·
+            <code>g_u8EmbLockReason</code> = 1(UVW+延遲)</td></tr>
+      <tr class="hi"><td class="c">2</td><td>平路放油門停車 ×10 次<br>(最高速 / 5 km/h / 3 km/h 各一組)</td>
+        <td><b>每次都是「減速 → 停住 → 軟夾」</b>,不應出現低速潛行後被夾停的頓挫。
+            事後讀計數器:<code>g_u16EmbLockCntUvwDelay</code> 應等於停車次數,
+            <code>g_u16EmbLockCntFailsafe</code> 應為 0</td></tr>
+      <tr class="hi"><td class="c">3</td><td>10% 坡 · 上坡點放</td>
+        <td>倒溜 2~4 cm 內夾住,<b>不應強烈震動</b> · 前輪不翹</td></tr>
+      <tr class="hi"><td class="c">4</td><td>10% 坡 · 下坡點放</td>
+        <td>下滑 2~3 cm 內夾住,<b>不應一次性強衝擊</b></td></tr>
+      <tr><td class="c">5</td><td>≥20% 陡坡 · 上坡點放</td>
+        <td>倒溜 &lt; 1/4 車輪(15.9 cm),絕不可掉到 1.5 秒 failsafe</td></tr>
+      <tr><td class="c">6</td><td>倒退檔運轉</td>
+        <td>加減速手感符合預期,段位 3 是預設曲線</td></tr>
+      <tr class="hi"><td class="c">7</td><td><b>堵轉/頂牆後放油門</b><br>(建議先在台架或有防護場地)</td>
+        <td>V0.24 移除了 coast,本項是原 coast 職責的回歸測試:<b>放油門後絕不可反向暴衝</b>,
+            應立即由 UVW 三相短路把馬達壓住(含堵轉 &gt;8 秒進入電流限制後再放)</td></tr>
+      <tr class="hi"><td class="c">8</td><td>減速近停途中重新給油門 / 停好後重新起步</td>
+        <td>UVW 解鎖、加速無延遲(出鎖門檻 <code>UVW_LOCK_RELEASE_REF</code> 未動)。<br>
+            起步時 UVW 要等 EMB 放開才解鎖,最多多 20ms(EMB 任務週期),體感應無差異</td></tr>
+      <tr><td class="c">9</td><td>停好(EMB 夾住)後靜置</td>
+        <td>三相下橋持續導通屬正常(靜止零電流、不發熱)。確認靜置電流無異常上升;
+            IBKS/充電中時 <code>RunMotor=0</code> → 應為浮接而非短路</td></tr>
+    </table>
+    <p style="margin:8px 0 0; font-size:.85rem">實車無法即時觀測時:坡道貼尺標 + 手機錄影逐格看夾煞位置;
+       回場後<b>保持通電</b>接上 debugger/X2CScope 讀 <code>g_u8EmbLockReason</code> 與
+       <code>g_u16EmbLockCnt*</code> 系列(斷電即歸零)。空載台架可用 X2CScope 即時觀測。
+       更詳細的下坡調校說明見 <code>downhill_slide_guide_V0.21.html</code>。</p>
+  </div>
+
+  <p class="foot">LWFDSPC V0.24 · 調機速查表 · 2026-08-19 · 坡度／位移／車速為理論估算,實際依實車</p>
+</div>
+</body>
+</html>

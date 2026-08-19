@@ -15,6 +15,8 @@ static uint32_t s_u32UvwLockTimerMs = 0;
 static bool s_bUvwLockTiming = false;
 // 有動力下的倒溜/倒衝：latched 表示已因此上鎖、須待鬆油門才解
 static bool s_bRollbackLatched = false;
+// 最後一次回傳 LOCK 的原因 (純診斷用，不參與任何控制判斷)
+static E_EMBRAKER_LOCK_REASON s_eLastLockReason = EMBRAKER_LOCK_REASON_NONE;
 
 // --- Private Helper Functions ---
 
@@ -80,6 +82,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
         } else {
             // 仍處於故障，保持鎖定
             eAction = EMBRAKER_ACTION_LOCK;
+            s_eLastLockReason = EMBRAKER_LOCK_REASON_FAULT;
         }
     } else if (bBrakeSwOn) {
         // [IBKS 立即鎖定] 手剎車/充電中 (RC12 Low) → 立即鎖定 EMB，不經任何延遲。
@@ -98,6 +101,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
         eNextState = EMBRAKER_STATE_LOCKED;
         s_bUvwLockTiming = false;
         s_bFailsafeTiming = false;
+        s_eLastLockReason = EMBRAKER_LOCK_REASON_IBKS;
     } else { // 非故障狀態，執行正常狀態機
         switch (s_eCurrentState) {
             case EMBRAKER_STATE_LOCKED:
@@ -105,6 +109,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                 if (s_bRollbackLatched) {
                     // [有動力倒溜閂鎖] 保持鎖定,直到駕駛鬆油門才解閂(避免坡上有油門時放開→立即又倒溜)。
                     eAction = EMBRAKER_ACTION_LOCK;
+                    s_eLastLockReason = EMBRAKER_LOCK_REASON_ROLLBACK_HOLD;
                     if (!bIsActive) {
                         s_bRollbackLatched = false;  // 鬆油門解閂;之後回歸正常運轉前檢查流程
                     }
@@ -119,6 +124,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                         logic_errorHandler_setAlarmStatus(LOGIC_ALARM_A04_EMB_SENSOR_FAULT, true);
                         eNextState = EMBRAKER_STATE_FAULT;
                         eAction = EMBRAKER_ACTION_LOCK;
+                        s_eLastLockReason = EMBRAKER_LOCK_REASON_PRERUN_FAIL;
                     } else {
                         // 運轉前檢查通過，釋放煞車
                         eAction = EMBRAKER_ACTION_RELEASE;
@@ -143,6 +149,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eAction = EMBRAKER_ACTION_LOCK;
                     eNextState = EMBRAKER_STATE_LOCKED;
                     s_bRollbackLatched = true;
+                    s_eLastLockReason = EMBRAKER_LOCK_REASON_ROLLBACK;
                 } else if (bDownhillSlideDetected) {
                     // [下坡滑動] 命令已歸零、車卻仍在移動 → 立即鎖定，不計時。
                     //   在 RELEASED 檢查是防禦性的：本狀態需要 bIsActive(未平滑的油門命令
@@ -150,6 +157,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     //   理論上重疊窗口極短。不設閂鎖，理由見 s_logic_embraker.h。
                     eAction = EMBRAKER_ACTION_LOCK;
                     eNextState = EMBRAKER_STATE_LOCKED;
+                    s_eLastLockReason = EMBRAKER_LOCK_REASON_DOWNHILL;
                 }
                 break;
 
@@ -174,6 +182,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     s_bRollbackLatched = true;
                     s_bUvwLockTiming = false;
                     s_bFailsafeTiming = false;
+                    s_eLastLockReason = EMBRAKER_LOCK_REASON_ROLLBACK;
                 } else if (bDownhillSlideDetected) {
                     // [下坡滑動] 命令已歸零、車卻仍在移動達門檻 → 立即鎖定，不計時。
                     //   **這是本狀態的主要著力點** —— 下坡點放時後面三條路全都不通:
@@ -186,12 +195,14 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                     eNextState = EMBRAKER_STATE_LOCKED;
                     s_bUvwLockTiming = false;
                     s_bFailsafeTiming = false;
+                    s_eLastLockReason = EMBRAKER_LOCK_REASON_DOWNHILL;
                 } else if (bReverseEdgeDetected) {
                     // [Plan B] 偵測到倒溜(反向霍爾邊緣) → 立即鎖定，繞過延遲。
                     // 適用於 UVW 短路在靜止時撐不住重力、車已開始倒溜的瞬間搶救。
                     eAction = EMBRAKER_ACTION_LOCK;
                     eNextState = EMBRAKER_STATE_LOCKED;
                     s_bUvwLockTiming = false;
+                    s_eLastLockReason = EMBRAKER_LOCK_REASON_REVERSE_EDGE;
                 } else if (bUVWLockActive) {
                     // [動作準則] UVW 三相短路(平順停車)生效後，計時達可設定延遲才鎖定 EMB。
                     //   計時從「UVW lock 生效」起算，延遲足夠讓馬達由短路減速到停止，
@@ -204,6 +215,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                         eAction = EMBRAKER_ACTION_LOCK;
                         eNextState = EMBRAKER_STATE_LOCKED;
                         s_bUvwLockTiming = false;
+                        s_eLastLockReason = EMBRAKER_LOCK_REASON_UVW_DELAY;
                     }
                 } else {
                     // UVW lock 尚未生效 → 重置 UVW 延遲計時；由「命令歸零起算」的逾時 failsafe 保底。
@@ -223,6 +235,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                             eAction = EMBRAKER_ACTION_LOCK;
                             eNextState = EMBRAKER_STATE_LOCKED;
                             s_bFailsafeTiming = false;
+                            s_eLastLockReason = EMBRAKER_LOCK_REASON_FAILSAFE;
                         }
                     } else {
                         // 命令尚未歸零(仍在減速斜坡上) → 不計時
@@ -235,6 +248,7 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
                 // 安全保護，任何未知狀態都回到鎖定狀態
                 s_eCurrentState = EMBRAKER_STATE_LOCKED;
                 eAction = EMBRAKER_ACTION_LOCK;
+                s_eLastLockReason = EMBRAKER_LOCK_REASON_FAULT;
                 break;
         }
     }
@@ -245,4 +259,8 @@ E_EMBRAKER_ACTION logic_embraker_update(uint16_t u16IembMv,
 
 E_EMBRAKER_STATE logic_embraker_getStatus(void) {
     return s_eCurrentState;
+}
+
+E_EMBRAKER_LOCK_REASON logic_embraker_getLastLockReason(void) {
+    return s_eLastLockReason;
 }
