@@ -95,6 +95,10 @@
         <td>V0.24 客戶測試:平地 OK、上下坡 OK。<code>EMB_ROLLBACK_REV_EDGES</code> 24→<b>30</b>、
             <code>EMBRAKER_LOCK_TIMEOUT_MS</code> 1500→<b>1000</b>;
             溫控 <code>RATIO_NORMAL</code> 0.35 實測 18A、爬坡力 OK 維持不動</td></tr>
+      <tr><td><b>全部軟夾 + 制動閘門</b><br>(2026-08-21)</td><td class="f">main.c / userparms.h</td>
+        <td>EMB 夾煞<b>不再有硬夾</b>,一律 100ms 漸降。下坡判準改回「沒變長」並新增
+            <code>EMB_DOWNHILL_MIN_BRAKE_CMD</code>(有在制動才算)，修「下坡靜止點放滑到
+            failsafe 才夾」</td></tr>
       <tr><td><b>夾煞原因觀測</b></td><td class="f">main.c : g_u8EmbLockReason 等</td>
         <td>新增純觀測變數與各原因計數器,事後接 debugger 即可知道停車是走哪條路徑夾的</td></tr>
     </table>
@@ -116,8 +120,10 @@
         <td class="val">150 ms</td><td class="c">50 ~ 300</td>
         <td>停車 UVW 短路後、EMB 上鎖前的等待時間。愈長停車愈平順但空窗愈久。改這顆最安全</td></tr>
     </table>
-    <div class="ok"><b>軟夾只用在正常停車路徑</b>(WAITING_TO_LOCK 走完 UVW 到期)。以下情境仍走硬夾(立即 0%):
-      IBKS 手煞、bMotorStop 系統禁制、有動力倒溜、下坡溜車 —— 這四種語意上或安全上不容延遲。</div>
+    <div class="ok"><b>[2026-08-21] 所有 EMB 夾煞一律軟夾</b>,不再有硬夾分派(IBKS、bMotorStop、倒溜、
+      下坡溜車全部走 100ms 漸降)。位移帳最壞情況:倒溜觸發於 52mm + 30% 坡上 ramp 期間約 40mm
+      ≈ 95mm,距 1/4 車輪護欄 159mm 仍有 1.6 倍餘裕 —— 也因此 <code>EMB_SOFT_CLAMP_TICKS</code>
+      不宜再加大。</div>
     <div class="danger"><b>⚠ EMB_SOFT_CLAMP_TICKS &gt; 10 的注意事項</b>:LOCK 觸發時倒溜/滑動偵測會**被解除武裝**,
       ramp 期間偵測不再重新武裝。30% 陡坡上 400ms ramp 期間最多可能滑動 ~80mm(仍在 1/4 車輪
       159mm 規格內但接近半數)。&gt; 20 tick 由編譯期 #error 擋下。</div>
@@ -130,10 +136,16 @@
           <th style="width:88px">範圍</th><th>意義</th></tr>
       <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_NODECEL_TOL_SHIFT</td>
         <td class="val">6<br>(1.6%)</td><td class="c">5 ~ 7</td>
-        <td><b>下坡靈敏度</b>。週期必須比 LOOKBACK 個邊緣前<b>短 1/2<sup>n</sup> 以上</b>才算車在加速。<br>
-            <b>7</b>(0.78%) = 裕度小 更靈敏 抓更緩的坡 · <b>5</b>(3.1%) = 裕度大 更保守<br>
-            <span style="color:var(--warn)">⚠ V0.24 起方向與舊版相反</span>(舊版是「容忍變長」)。
-            平路誤鎖已由判準本身結構上排除,本值不再是防誤鎖的旋鈕</td></tr>
+        <td><b>下坡靈敏度</b>。週期變長不超過 1/2<sup>n</sup> 仍算「沒減速」。<br>
+            <b>5</b>(3.1%) = 更寬鬆 抓緩坡 · <b>7</b>(0.78%) = 更嚴格 不易誤鎖<br>
+            必須與下方 <code>MIN_BRAKE_CMD</code> 成對使用 —— 只有確實有制動時,
+            「沒減速」才等於「重力贏」</td></tr>
+      <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_MIN_BRAKE_CMD</td>
+        <td class="val">500<br>(0.76 A)</td><td class="c">300 ~ 884</td>
+        <td><b>「速度環確實在出制動扭矩」的門檻</b>(Q15 電流命令)。<br>
+            不是坡度判準(平路減速時也 &gt; 500),而是上面那條判準的前提。<br>
+            <b>不可超過 884</b>(= 0.25 km/h 時的輸出),否則 UVW 交接前的低速段被擋掉,
+            等速潛行漏抓</td></tr>
       <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_DOWNHILL_MAX_SPEED_KMHX100</td>
         <td class="val">300<br>(3 km/h)</td><td class="c">150 ~ 500</td>
         <td><b>下坡夾煞車速上限</b>(km/h×100)。超過此車速本偵測不夾。嫌衝擊大可降到 250 (2.5km/h)</td></tr>
@@ -164,8 +176,9 @@
         <td>先加大 <code>EMBRAKER_SHORT_TO_LOCK_DELAY_MS</code> 150→200~300;無效再加大
             <code>EMB_SOFT_CLAMP_TICKS</code> 5→6→8</td></tr>
       <tr class="hi"><td>下坡點放後滑很遠才夾</td>
-        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → <b>7</b> (裕度變小、更靈敏)<br>
-            <span style="color:var(--warn)">⚠ V0.24 起方向與 V0.23 速查表相反</span></td></tr>
+        <td>先確認 <code>g_u8EmbLockReason</code>:若是 <b>2(failsafe)</b> 代表下坡偵測沒接手 →
+            檢查 <code>EMB_DOWNHILL_MIN_BRAKE_CMD</code> 是否設太高;<br>
+            若是 3(下坡偵測) 則調 <code>TOL_SHIFT</code> 6 → <b>5</b>(更寬鬆抓緩坡)</td></tr>
       <tr class="hi"><td>下坡夾煞時翹前輪 / 一次性強衝擊</td>
         <td>加大 <code>EMB_SOFT_CLAMP_TICKS</code> 到 6~10;若仍翹則降低
             <code>EMB_DOWNHILL_MAX_SPEED_KMHX100</code> 300 → 250</td></tr>
@@ -174,22 +187,22 @@
             ⚠ 但實車兩次調校都是往**大**的方向走(16 → 24 → 30),因為太小會讓
             <b>上坡起步的正常下滑被誤鎖</b>。兩個症狀共用同一顆參數,調之前先確認是哪一個</td></tr>
       <tr><td>平路點放油門,煞車會咬住</td>
-        <td>V0.24 起下坡偵測在平路<b>結構上不可能觸發</b>,不要再調 TOL_SHIFT。<br>
-            請改讀 <code>g_u8EmbLockReason</code>:2 = 逾時 failsafe(停車鏈有路徑失效)、
-            3 = 下坡偵測、4 = 倒溜。把讀到的值回報,不要靠調參數掩蓋</td></tr>
+        <td>先讀 <code>g_u8EmbLockReason</code> 確認路徑:2 = 逾時 failsafe、3 = 下坡偵測、4 = 倒溜。<br>
+            若是 3 → <code>TOL_SHIFT</code> 6 → <b>7</b>(更嚴格);若是 2 → 停車鏈有路徑失效,
+            回報不要靠調參數掩蓋</td></tr>
       <tr><td>顛簸地面誤鎖</td>
         <td><code>EMB_DOWNHILL_NODECEL_CONFIRM</code> 3 → 5</td></tr>
       <tr><td>極緩坡(2~3%)仍慢慢溜</td>
-        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → 7(裕度變小、更靈敏)。<br>
-            坡度恰與阻力打平時車是<b>等速</b>滑行、週期不變短,本偵測按設計不動作,
-            由 1.5 秒 failsafe 接手(車速約 1 km/h,衝擊小)</td></tr>
+        <td><code>EMB_DOWNHILL_NODECEL_TOL_SHIFT</code> 6 → 5(更寬鬆)。<br>
+            等速潛行(重力與制動打平)的週期是「不變」,新判準抓得到;若仍漏抓,
+            多半是 <code>MIN_BRAKE_CMD</code> 設太高把低速段擋掉了</td></tr>
     </table>
     <div class="danger"><b>四件不要做</b>:① 不要重新引入 V0.20 的武裝旗標 <code>s_bEmbDownhillArmed</code>
       (解除門檻低於油門最低命令 → 整條失效)　② 不要為舒適性給 <code>EMBRAKER_LOCK_TIMEOUT_MS</code>
       加車速閘門(最後保底)　③ 不要把 <code>EMB_DOWNHILL_NODECEL_LOOKBACK</code> 設非 6 倍數
-      (霍爾裝配誤差會被誤判成加減速;V0.24 起有編譯期 #error 擋)　④ 不要把下坡判準改回
-      「週期沒變長就算沒減速」——那個判準的隱含減速度門檻帶 v² 項,在 3 km/h 附近會把平路自由
-      滑行誤判成沒減速而硬夾(即 V0.23 平地頓挫的其中一條路徑)</div>
+      (霍爾裝配誤差會被誤判成加減速;V0.24 起有編譯期 #error 擋)　④ 不要把「週期沒變長」判準與
+      「有在制動」閘門(<code>EMB_DOWNHILL_MIN_BRAKE_CMD</code>)拆開使用 —— 少了制動閘門,
+      「沒減速」在無制動滑行時也成立,會在平路誤鎖(V0.23 平地頓挫的路徑之一)</div>
   </div>
 
   <div class="card">
@@ -206,8 +219,9 @@
             <code>g_u16EmbLockCntFailsafe</code> 應為 0</td></tr>
       <tr class="hi"><td class="c">3</td><td>10% 坡 · 上坡點放</td>
         <td>倒溜 2~4 cm 內夾住,<b>不應強烈震動</b> · 前輪不翹</td></tr>
-      <tr class="hi"><td class="c">4</td><td>10% 坡 · 下坡點放</td>
-        <td>下滑 2~3 cm 內夾住,<b>不應一次性強衝擊</b></td></tr>
+      <tr class="hi"><td class="c">4</td><td>10% 坡 · <b>下坡靜止點放</b></td>
+        <td>不應滑行到 1 秒 failsafe 才夾。<code>g_u8EmbLockReason</code> 應為 <b>3</b>(下坡偵測,
+            約 47mm) 或 1(UVW+延遲);若讀到 <b>2</b>(failsafe) 表示修法未生效</td></tr>
       <tr><td class="c">5</td><td>≥20% 陡坡 · 上坡點放</td>
         <td>倒溜 &lt; 1/4 車輪(15.9 cm),絕不可掉到 1.5 秒 failsafe</td></tr>
       <tr><td class="c">6</td><td>倒退檔運轉</td>

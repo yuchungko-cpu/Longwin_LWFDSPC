@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V0.24 上/下坡 EMB 與 UVW 短路動作對照表</title>
+<style>
+  :root { --bg:#0f1720; --card:#1a2531; --fg:#e6edf3; --muted:#9fb0c0; --accent:#4ea1ff;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --code:#0b1119; --border:#2b3948; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.55; }
+  .wrap { max-width:1060px; margin:0 auto; padding:26px 18px 50px; }
+  h1 { font-size:1.55rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:15px 19px 19px; margin:0 0 16px; }
+  h2 { font-size:1.12rem; margin:0 0 9px; }
+  h2 .n { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center;
+          background:var(--accent); color:#04121f; border-radius:50%; font-size:.9rem;
+          margin-right:8px; font-weight:800; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px;
+         font-family:Consolas,monospace; font-size:.85em; color:#ffd580; }
+  table { width:100%; border-collapse:collapse; margin:6px 0; font-size:.84rem; }
+  th,td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:rgba(78,161,255,.12); font-size:.82rem; }
+  td.c { text-align:center; white-space:nowrap; }
+  td.f { font-family:Consolas,monospace; font-size:.81rem; color:#ffd580; }
+  td.val { text-align:center; white-space:nowrap; font-weight:700; color:#ffe082; }
+  tr.hi td { background:rgba(255,210,63,.07); }
+  .danger { background:rgba(248,81,73,.08); border-left:4px solid var(--bad);
+            padding:8px 12px; border-radius:6px; margin:10px 0 0; font-size:.85rem; }
+  .ok { background:rgba(63,185,80,.08); border-left:4px solid var(--ok);
+        padding:8px 12px; border-radius:6px; margin:0 0 10px; font-size:.86rem; }
+  .k { display:inline-block; background:#ffd23f; color:#1a1200; border-radius:4px;
+       padding:0 6px; font-weight:800; font-size:.75rem; margin-right:5px; }
+  .bd { display:inline-block; border-radius:4px; padding:0 5px; font-size:.74rem;
+        font-weight:700; white-space:nowrap; }
+  .bd-foc { background:rgba(78,161,255,.22); color:#9ecbff; }
+  .bd-uvw { background:rgba(63,185,80,.20); color:#7ee787; }
+  .bd-emb { background:rgba(248,81,73,.18); color:#ff9c94; }
+  .bd-off { background:rgba(159,176,192,.15); color:#9fb0c0; }
+  .foot { color:var(--muted); font-size:.78rem; text-align:center; margin-top:24px; }
+  @media print {
+    @page { size:A4 landscape; margin:7mm 8mm; }
+    :root { --bg:#fff; --card:#fff; --fg:#111; --muted:#555; --accent:#0b5cad;
+            --border:#b9c2cc; --code:#f2f4f7; }
+    * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { background:#fff; color:#111; font-size:7.6pt; line-height:1.25; }
+    .wrap { max-width:none; padding:0; }
+    h1 { font-size:11.5pt; margin:0 0 1px; }
+    .sub { margin:0 0 4px; font-size:7pt; }
+    h2 { font-size:9pt; margin:0 0 3px; }
+    h2 .n { width:16px; height:16px; line-height:16px; font-size:7pt;
+            background:#0b5cad; color:#fff; margin-right:5px; }
+    .card { border:1px solid #b9c2cc; border-radius:5px; margin:0 0 4px; padding:5px 8px 6px;
+            break-inside:avoid; page-break-inside:avoid; }
+    code { background:#f2f4f7; color:#8a3a00; border:1px solid #e1e5ea; padding:0 3px; font-size:6.8pt; }
+    table { font-size:6.5pt; margin:2px 0; } th,td { padding:2px 4px; }
+    th { background:#e6eef8 !important; font-size:6.5pt; }
+    tr,td,th { break-inside:avoid; }
+    td.val { color:#7a4b00; } td.f { color:#8a3a00; font-size:6.4pt; }
+    tr.hi td { background:#fffbe8 !important; }
+    .danger { background:#ffece9; border-left-color:#c0271a; padding:3px 7px;
+              margin:3px 0 0; font-size:6.8pt; border-left-width:3px; }
+    .ok { background:#eaf7ec; border-left-color:#1a7f34; padding:3px 7px;
+          margin:0 0 3px; font-size:7pt; border-left-width:3px; }
+    .k { background:#ffd23f; color:#1a1200; font-size:6.4pt; padding:0 3px; }
+    .bd { font-size:6.3pt; padding:0 3px; border:1px solid #ccc; }
+    .bd-foc { background:#e7f1ff !important; color:#0b5cad !important; }
+    .bd-uvw { background:#e9f7ec !important; color:#1a7f34 !important; }
+    .bd-emb { background:#ffece9 !important; color:#c0271a !important; }
+    .bd-off { background:#f2f4f7 !important; color:#555 !important; }
+    .sub,.foot { color:#555; } .foot { margin-top:4px; font-size:6.4pt; }
+    p { margin:2px 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>V0.24 上/下坡 EMB 與 UVW 短路動作對照表</h1>
+  <p class="sub">LWFDSPC <b>V0.24</b> · 2026-08-21 · 對照 commit <code>e1d9ae1</code> 的實車參數
+    · 位移/時間為理論估算(阻力估 0.2 m/s²、1 邊緣 = 1.746 mm),實際依實車</p>
+
+  <div class="card">
+    <h2><span class="n">1</span>兩個致動器與它們的進出條件</h2>
+    <div class="ok">V0.24 起 speed mode <b>沒有 coast(PWM 全關)</b>。馬達只有兩種通電狀態:
+      <span class="bd bd-foc">FOC</span> 或 <span class="bd bd-uvw">UVW 短路</span>;
+      <span class="bd bd-emb">EMB</span> 是機械煞車,與上述兩者並存。</div>
+    <table>
+      <tr><th style="width:104px">致動器</th><th style="width:150px">實體動作</th>
+          <th style="width:200px">生效(進鎖)條件</th><th style="width:190px">解除(出鎖)條件</th><th>制動力特性</th></tr>
+      <tr><td><span class="bd bd-foc">FOC</span> 速度環</td>
+        <td>三相 PWM 正常調變</td>
+        <td>預設狀態(UVW 未短路、PWM 未被禁制)</td>
+        <td>UVW 進鎖時被 override</td>
+        <td>放油門後 reference = 0 → 制動扭矩 ∝ 速度誤差,上限 = 溫控電流上限(0.35 ≈ 18A)。
+            <b>車速愈低制動愈弱</b>(Kp·error 隨速度縮小)</td></tr>
+      <tr class="hi"><td><span class="bd bd-uvw">UVW 短路</span></td>
+        <td>三相下橋全開<br>(<code>OVRDAT=1</code>)</td>
+        <td><code>i16TargetRpm == 0</code><br>且 <code>HallPulsesLatch &lt; 4</code>(0.25 km/h)<br>
+            <b>或 EMB 已夾住</b>(V0.24 新增)</td>
+        <td><code>|i16TargetRpm| &ge; 500</code><br><b>且 EMB 未夾住</b></td>
+        <td>制動扭矩 ∝ 反電動勢 ∝ 轉速。<b>ω≈0 幾乎無扭矩</b> → 坡上撐不住;
+            靜止時零電流(不發熱)</td></tr>
+      <tr><td><span class="bd bd-emb">EMB</span> 機械煞車</td>
+        <td>OEMB PWM duty<br>100% = 放開 / 0% = 夾緊</td>
+        <td>見第 2 節的六條路徑</td>
+        <td><code>LOCKED</code> 狀態下運轉前檢查通過(油門 &gt; 800 且 IEMB 正常)</td>
+        <td>與車速無關的機械力。[2026-08-21] <b>一律軟夾</b>(100%→0% 歷時 100 ms),不再有硬夾</td></tr>
+      <tr><td><span class="bd bd-off">PWM 全關</span></td>
+        <td>六個開關全關(浮接)</td>
+        <td colspan="2"><code>RunMotor==0</code>(含 IBKS/充電中) 或 <code>Fault</code> 閂鎖 或 電池禁制</td>
+        <td>無制動力。<b>已不用於停車路徑</b></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span>EMB 夾煞的六條路徑與優先序</h2>
+    <p style="margin:0 0 4px; font-size:.85rem">同一個 20 ms tick 內由上往下判斷,<b>先成立者勝</b>(if-else 鏈)。
+      原因碼可由 <code>g_u8EmbLockReason</code> 讀出。</p>
+    <table>
+      <tr><th style="width:34px">序</th><th style="width:170px">路徑</th><th style="width:120px">適用狀態</th>
+          <th style="width:230px">觸發條件</th><th style="width:64px">夾法</th><th style="width:56px">原因碼</th><th>備註</th></tr>
+      <tr><td class="c">0</td><td>IBKS 手剎車/充電中</td><td class="c">全部</td>
+        <td><code>uGF.BrakeSWOn == 1</code></td><td class="c">軟夾</td><td class="c">6</td>
+        <td>狀態機外的最高優先。同時 <code>RunMotor=0</code> → PWM 全關(充電時不可短路)</td></tr>
+      <tr><td class="c">1</td><td>有動力倒溜</td><td class="c">RELEASED<br>WAITING_TO_LOCK</td>
+        <td>淨反向邊緣 &ge; <b>30</b>(52 mm)</td><td class="c">軟夾</td><td class="c">4</td>
+        <td>觸發後<b>閂鎖</b>至鬆油門。位移帳:52mm + ramp 期間約 40mm(30% 坡) ≈ 95mm &lt; 159mm</td></tr>
+      <tr><td class="c">2</td><td>下坡滑動</td><td class="c">RELEASED<br>WAITING_TO_LOCK</td>
+        <td>命令歸零 + 週期真的變短 + &lt;3 km/h + 位移 &ge; <b>27</b>(47 mm)</td>
+        <td class="c">軟夾</td><td class="c">3</td><td>不閂鎖。**下坡靜止點放的主要路徑**</td></tr>
+      <tr class="hi"><td class="c">3</td><td>Plan B 反向邊緣</td><td class="c">WAITING_TO_LOCK</td>
+        <td>UVW 已生效 且 滾動方向 &ne; 鎖存行駛方向</td><td class="c">軟夾</td><td class="c">5</td>
+        <td><b>1 個邊緣就觸發</b>(1.75 mm)。前提是 UVW 已進鎖</td></tr>
+      <tr class="hi"><td class="c">4</td><td>UVW + 延遲<br>(正常停車)</td><td class="c">WAITING_TO_LOCK</td>
+        <td>UVW 生效後經過 <b>150 ms</b></td><td class="c">軟夾</td><td class="c">1</td>
+        <td>20 ms 任務解析度 → 實際 150~170 ms。延遲期間 UVW 仍在制動</td></tr>
+      <tr><td class="c">5</td><td>failsafe 逾時</td><td class="c">WAITING_TO_LOCK</td>
+        <td>命令歸零後 <b>1000 ms</b> 仍未由上述任一路徑夾住</td><td class="c">軟夾</td><td class="c">2</td>
+        <td><b>刻意不設車速閘門</b>。計時從命令歸零起算,非鬆油門起算</td></tr>
+    </table>
+    <div class="danger"><b>[2026-08-21] 六條路徑全部軟夾</b>(<code>EMB_SOFT_CLAMP_TICKS = 5</code>,100 ms 漸降)。
+      ramp 期間倒溜/下坡偵測是解武裝的,所以位移餘裕由原本的 3 倍降到約 1.6 倍
+      (倒溜 52mm + 30% 坡 ramp 約 40mm ≈ 95mm vs 護欄 159mm)—— <b>不要再加大 TICKS</b>。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span>上坡情境</h2>
+    <table>
+      <tr><th style="width:158px">情境</th><th style="width:106px">車的動作</th>
+          <th style="width:120px">UVW 狀態</th><th style="width:150px">誰在制動</th>
+          <th style="width:190px">EMB 由哪條路徑夾</th><th style="width:74px">位移</th><th>備註</th></tr>
+      <tr class="hi"><td><b>U1 上坡起步</b><br>握著油門,車被重力拉回</td>
+        <td>反向<br>(與排檔相反)</td>
+        <td><span class="bd bd-off">未短路</span><br>油門 &ge; 500 → 出鎖</td>
+        <td><span class="bd bd-foc">FOC 在驅動</span><br>(不是制動;重力贏)</td>
+        <td>倒溜偵測 30 邊緣 → <b>軟夾</b>(碼 4)</td>
+        <td class="val">52 mm</td>
+        <td>Plan B <b>不成立</b>(需 UVW 生效)。夾後閂鎖 → 鬆油門解閂 → 再給油門才會放。
+            夾住後 UVW 會被強制短路(V0.24),即使駕駛仍握著油門也不會讓馬達對著夾緊的煞車出力。
+            <b>這就是客戶把 24 調到 30 的情境</b></td></tr>
+      <tr><td><b>U2 上坡點放</b><br>放油門 → 車停下 → 開始倒溜</td>
+        <td>先停<br>再反向</td>
+        <td><span class="bd bd-uvw">已短路</span><br>放油門 + 近停即進鎖</td>
+        <td><span class="bd bd-uvw">UVW(極弱)</span><br>ω≈0 撐不住坡度</td>
+        <td>Plan B 第一個反向邊緣 → <b>軟夾</b>(碼 5)<br>
+            或 150 ms 先到 → 軟夾(碼 1)</td>
+        <td class="val">2~4 mm</td>
+        <td>V0.24 起 UVW 不必等減速斜坡,故 Plan B 幾乎必先觸發。
+            倒溜偵測(52 mm)在此淪為<b>備援</b></td></tr>
+      <tr><td><b>U3 上坡帶速放油門</b><br>例如 3 km/h 上坡放油門</td>
+        <td>持續減速<br>(重力同向阻擋)</td>
+        <td><span class="bd bd-off">未短路</span><br>latch &ge; 4 進不去</td>
+        <td><span class="bd bd-foc">FOC reference 0</span><br>+ 重力,減速很快</td>
+        <td>減速到 latch &lt; 4 → UVW 進鎖 → 之後同 U2</td>
+        <td class="val">—</td>
+        <td>下坡偵測<b>結構上不成立</b>(週期必然變長)。failsafe 幾乎用不到</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span>下坡情境</h2>
+    <table>
+      <tr><th style="width:158px">情境</th><th style="width:106px">車的動作</th>
+          <th style="width:120px">UVW 狀態</th><th style="width:150px">誰在制動</th>
+          <th style="width:190px">EMB 由哪條路徑夾</th><th style="width:74px">位移</th><th>備註</th></tr>
+      <tr class="hi"><td><b>D1 停在坡上點放</b><br>(一般點放,車被帶到約 1 km/h)</td>
+        <td>先微減速<br>再被重力加速</td>
+        <td><span class="bd bd-off">未短路</span><br>latch 仍反映點放的移動 (≥ 4) → 進不去</td>
+        <td><span class="bd bd-foc">FOC reference 0</span><br>低速時 P 項小,停在「制動 = 重力」的平衡速度</td>
+        <td>下坡偵測 27 邊緣 → <b>軟夾</b>(碼 3)<br>[修法前] 滑到 1000 ms failsafe(碼 2)</td>
+        <td class="val">47 mm</td>
+        <td><b>⚠ 這是實車回報的情境。</b><code>HallPulsesLatch</code> 是 100 ms 窗計數,
+            latch &lt; 4 需要 100 ms 內移動 &lt; 7 mm(&lt; 0.25 km/h) —— 一般點放都會超過,
+            所以 UVW <b>進不去</b>,不能靠 UVW+150 ms</td></tr>
+      <tr><td><b>D2 極短點放</b><br>車輪幾乎沒轉(&lt; 7 mm / 100 ms)</td>
+        <td>由靜止<br>開始加速</td>
+        <td><span class="bd bd-uvw">已短路</span><br>latch &lt; 4 → 立即進鎖</td>
+        <td><span class="bd bd-uvw">UVW(極弱)</span><br>ω≈0</td>
+        <td>UVW + 150 ms → <b>軟夾</b>(碼 1)</td>
+        <td class="val">3~40 mm<br>(依坡度)</td>
+        <td>逐坡度數字見第 5 節。只有這種「車輪幾乎沒轉」的點放才走得到這條</td></tr>
+      <tr class="hi"><td><b>D3 下坡帶速放油門</b><br>&lt; 3 km/h,重力贏過 FOC 制動</td>
+        <td>持續加速</td>
+        <td><span class="bd bd-off">未短路</span><br>latch &ge; 4 進不去</td>
+        <td><span class="bd bd-foc">FOC reference 0</span><br>低速時制動力小</td>
+        <td>下坡偵測 27 邊緣 → <b>軟夾</b>(碼 3)</td>
+        <td class="val">47 mm</td>
+        <td>與 D1 同一條路徑。47 mm 是最早可能觸發點(LOOKBACK 24 + CONFIRM 3),
+            兩個閘門同時達標,沒有一個在空轉</td></tr>
+      <tr><td><b>D4 下坡帶速放油門</b><br>車速 &ge; 3 km/h</td>
+        <td>加速或緩減速</td>
+        <td><span class="bd bd-off">未短路</span></td>
+        <td><span class="bd bd-foc">FOC reference 0</span><br>誤差大 → 接近電流上限,<b>此時 FOC 是最強的制動</b></td>
+        <td>減速到 latch &lt; 4 → UVW+150 ms(碼 1)<br>否則 <b>failsafe 1000 ms</b>(碼 2)</td>
+        <td class="val">依車速</td>
+        <td>下坡偵測被 3 km/h <b>上限閘門擋掉</b>(刻意:上限之上不做帶速夾煞)。
+            <b>客戶把 failsafe 1500→1000 就是為了這一格</b></td></tr>
+      <tr><td><b>D5 約 2% 緩坡</b><br>重力與阻力打平,等速滑行</td>
+        <td>不加速<br>也不減速</td>
+        <td><span class="bd bd-off">未短路</span><br>(若已近停則會短路)</td>
+        <td><span class="bd bd-foc">FOC</span> 與重力打平</td>
+        <td>下坡偵測 27 邊緣 → <b>軟夾</b>(碼 3)</td>
+        <td class="val">47 mm</td>
+        <td>[2026-08-21 修法後] 等速滑行的週期是「不變」→ 新判準(沒變長 + 有制動)抓得到;
+            舊判準(必須變短)抓不到,會落到 failsafe</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">5</span>位移量化:D2(極短點放,UVW 進得去)的夾煞位移</h2>
+    <p style="margin:0 0 4px; font-size:.85rem">UVW 立即進鎖 → 150~170 ms 後軟夾。
+      起點車速 0、淨加速度 = g·坡度 − 阻力(0.2 m/s²)。
+      <b>一般點放(D1)走不到這條</b> —— latch ≥ 4 使 UVW 進不去,改由下坡偵測在 47 mm 接手。</p>
+    <table>
+      <tr><th style="width:90px">坡度</th><th style="width:120px">淨加速度</th>
+          <th style="width:150px">150~170 ms 的位移</th><th style="width:120px">霍爾邊緣數</th>
+          <th>與 47 mm 下坡門檻的關係</th></tr>
+      <tr><td class="c">5%</td><td class="c">0.29 m/s²</td><td class="val">3.3 ~ 4.2 mm</td><td class="c">2</td>
+        <td>遠早於 47 mm → 走 UVW+150 ms(碼 1)</td></tr>
+      <tr><td class="c">10%</td><td class="c">0.78 m/s²</td><td class="val">8.8 ~ 11.3 mm</td><td class="c">5~6</td>
+        <td>同上</td></tr>
+      <tr><td class="c">20%</td><td class="c">1.76 m/s²</td><td class="val">19.8 ~ 25.5 mm</td><td class="c">11~15</td>
+        <td>同上</td></tr>
+      <tr><td class="c">30%</td><td class="c">2.74 m/s²</td><td class="val">30.9 ~ 39.6 mm</td><td class="c">18~23</td>
+        <td>仍在 47 mm 以內 → 同上</td></tr>
+    </table>
+    <p style="margin:6px 0 4px; font-size:.85rem"><b>若起點已有油門最低命令的速度(0.97 km/h)</b>,兩條路徑會競賽:</p>
+    <table>
+      <tr><th style="width:90px">坡度</th><th style="width:150px">走完 47 mm 所需時間</th>
+          <th style="width:130px">到達時車速</th><th style="width:150px">150 ms 時已滑</th><th>誰先夾</th></tr>
+      <tr><td class="c">5%</td><td class="c">160 ms</td><td class="c">1.14 km/h</td><td class="c">43.8 mm</td>
+        <td>UVW+150 ms → <b>軟夾</b>(碼 1)</td></tr>
+      <tr><td class="c">10%</td><td class="c">144 ms</td><td class="c">1.38 km/h</td><td class="c">49.3 mm</td>
+        <td>下坡偵測 → <b>軟夾</b>(碼 3)</td></tr>
+      <tr><td class="c">20%</td><td class="c">124 ms</td><td class="c">1.76 km/h</td><td class="c">60.3 mm</td>
+        <td>下坡偵測 → <b>軟夾</b>(碼 3)</td></tr>
+      <tr><td class="c">30%</td><td class="c">111 ms</td><td class="c">2.07 km/h</td><td class="c">71.4 mm</td>
+        <td>下坡偵測 → <b>軟夾</b>(碼 3)</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">6</span>平地對照(正常停車)</h2>
+    <table>
+      <tr><th style="width:158px">情境</th><th style="width:106px">車的動作</th><th style="width:120px">UVW 狀態</th>
+          <th style="width:150px">誰在制動</th><th style="width:190px">EMB 由哪條路徑夾</th>
+          <th style="width:74px">位移</th><th>備註</th></tr>
+      <tr class="hi"><td><b>F1 平地放油門停車</b></td>
+        <td>單調減速<br>到停</td>
+        <td><span class="bd bd-uvw">已短路</span><br>latch &lt; 4 當下即進鎖</td>
+        <td><span class="bd bd-foc">FOC reference 0</span> 為主<br>近停後交給 <span class="bd bd-uvw">UVW</span></td>
+        <td>UVW + 150 ms → <b>軟夾</b>(碼 1)</td>
+        <td class="val">—</td>
+        <td>下坡偵測在平路<b>任何車速下結構上都不可能觸發</b>(阻力恆為正 → 週期必然變長)。
+            failsafe 不應被用到 → <code>g_u16EmbLockCntFailsafe</code> 應為 0</td></tr>
+    </table>
+    <div class="ok"><b>驗收判準</b>:平地停車 N 次後,<code>g_u16EmbLockCntUvwDelay</code> 應等於 N,
+      而 <code>g_u16EmbLockCntFailsafe</code>、<code>g_u16EmbLockCntDownhill</code> 應為 0。
+      若 failsafe 有累加,代表 UVW 沒能及時進鎖,要查 <code>HallPulsesLatch</code> 為何回不到 4 以下。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">7</span>夾煞原因碼與現行參數</h2>
+    <table>
+      <tr><th style="width:56px">碼</th><th style="width:190px">列舉值</th><th style="width:64px">夾法</th><th>意義</th></tr>
+      <tr class="hi"><td class="c">1</td><td class="f">UVW_DELAY</td><td class="c">軟夾</td>
+        <td><b>正常停車</b>。平地/下坡點放的預期路徑</td></tr>
+      <tr><td class="c">2</td><td class="f">FAILSAFE</td><td class="c">軟夾</td>
+        <td>命令歸零 1000 ms 仍在動 → 帶速夾。平地出現代表停車鏈有路徑失效</td></tr>
+      <tr><td class="c">3</td><td class="f">DOWNHILL</td><td class="c">軟夾</td><td>下坡滑動偵測(47 mm)</td></tr>
+      <tr><td class="c">4</td><td class="f">ROLLBACK</td><td class="c">軟夾</td><td>有動力倒溜(52 mm),會閂鎖</td></tr>
+      <tr><td class="c">5</td><td class="f">REVERSE_EDGE</td><td class="c">軟夾</td><td>Plan B:UVW 生效後的第一個反向邊緣</td></tr>
+      <tr><td class="c">6</td><td class="f">IBKS</td><td class="c">軟夾</td><td>手剎車/充電中訊號</td></tr>
+      <tr><td class="c">7</td><td class="f">ROLLBACK_HOLD</td><td class="c">—</td><td>LOCKED 狀態下倒溜閂鎖保持鎖定</td></tr>
+      <tr><td class="c">8</td><td class="f">FAULT</td><td class="c">軟夾</td><td>A04 IEMB 故障保持鎖定</td></tr>
+      <tr><td class="c">9</td><td class="f">PRERUN_FAIL</td><td class="c">軟夾</td><td>運轉前檢查 IEMB 不合格</td></tr>
+    </table>
+    <table>
+      <tr><th style="width:300px">參數</th><th style="width:110px">現值</th><th style="width:110px">物理量</th><th>作用</th></tr>
+      <tr><td class="f">UVW_LOCK_STOP_PULSES</td><td class="val">4</td><td class="c">0.25 km/h</td>
+        <td>UVW 進鎖的車速門檻(每 100 ms 的霍爾邊緣數)</td></tr>
+      <tr><td class="f">UVW_LOCK_RELEASE_REF</td><td class="val">500</td><td class="c">0.35 km/h</td>
+        <td>UVW 出鎖的油門目標門檻(遲滯的另一半)</td></tr>
+      <tr class="hi"><td class="f">EMBRAKER_SHORT_TO_LOCK_DELAY_MS</td><td class="val">150</td><td class="c">ms</td>
+        <td>UVW 生效到 EMB 夾煞的等待。停車舒適性的首選旋鈕(無安全代價)</td></tr>
+      <tr class="hi"><td class="f">EMB_SOFT_CLAMP_TICKS</td><td class="val">5</td><td class="c">100 ms</td>
+        <td>軟夾漸降時長(20 ms/tick)</td></tr>
+      <tr class="hi"><td class="f">EMB_ROLLBACK_REV_EDGES</td><td class="val">30</td><td class="c">52 mm</td>
+        <td>倒溜位移門檻。上限硬性 91(1/4 車輪 = 159 mm)</td></tr>
+      <tr class="hi"><td class="f">EMB_DOWNHILL_SLIDE_EDGES</td><td class="val">27</td><td class="c">47 mm</td>
+        <td>下坡位移門檻(推導值 = LOOKBACK 24 + CONFIRM 3)</td></tr>
+      <tr><td class="f">EMB_DOWNHILL_NODECEL_TOL_SHIFT</td><td class="val">6</td><td class="c">1.6%</td>
+        <td>「週期沒變長」的雜訊容忍</td></tr>
+      <tr class="hi"><td class="f">EMB_DOWNHILL_MIN_BRAKE_CMD</td><td class="val">500</td><td class="c">0.76 A</td>
+        <td>「確實在出制動扭矩」的門檻,是上一列判準的前提。不可超過 884</td></tr>
+      <tr><td class="f">EMB_DOWNHILL_MAX_SPEED_KMHX100</td><td class="val">300</td><td class="c">3.00 km/h</td>
+        <td>下坡偵測的車速上限。之上絕不由本偵測夾煞</td></tr>
+      <tr class="hi"><td class="f">EMBRAKER_LOCK_TIMEOUT_MS</td><td class="val">1000</td><td class="c">ms</td>
+        <td>命令歸零後的 failsafe 逾時。收緊安全、放寬要有理由</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">8</span>三個不變量(讀表時請一併記住)</h2>
+    <table>
+      <tr><th style="width:230px">不變量</th><th>理由</th></tr>
+      <tr><td><b>倒溜與下坡是不同的物理現象,不可合併</b></td>
+        <td>倒溜 = 車往與<b>排檔相反</b>方向動(方向問題,規格管位移 &le; 1/4 車輪);
+            下坡 = 車往與命令<b>相同</b>方向動但重力超過阻力(速度問題,無位移規格)。
+            倒溜計數的地板是 0,下坡往前滑每個邊緣都是 −1 被夾在 0 → 結構上永遠達不到門檻</td></tr>
+      <tr><td><b>failsafe 刻意沒有車速閘門</b></td>
+        <td>命令已歸零卻仍持續移動達逾時,代表所有正常減速與保持路徑都失效,
+            此時「車還在動」本身就是安全疑慮。舒適性要靠<b>更早的路徑先接手</b>解決,
+            不是替最後保底加閘門</td></tr>
+      <tr><td><b>低速段一律是 UVW 短路,不是浮接</b></td>
+        <td>短路結構上不可能驅動馬達、靜止時零電流、被外力推動時提供制動力,
+            比 PWM 全關(浮接)嚴格更強。V0.24 因此取消了 coast,並讓 EMB 夾住的全程保持短路</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">LWFDSPC V0.24 · 上/下坡 EMB 與 UVW 動作對照 · 2026-08-21 ·
+    程式對照:main.c(UVW 進出鎖、偵測合成、PWM 輸出分支)、s_logic_embraker.c(六條夾煞路徑)</p>
+</div>
+</body>
+</html>

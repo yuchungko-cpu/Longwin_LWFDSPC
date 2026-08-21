@@ -1360,16 +1360,24 @@ void emb_pwm_hardLock(void) {
 /**
  * 從目前 duty 線性遞減到 0,共 u16Ticks 個 20ms tick 完成。
  * u16Ticks = 0 → 立即硬鎖(等同 hardLock);ticks=6 代表 120ms 完成。
- * 已在 ramp 中重複呼叫:以目前 duty 為新起點、u16Ticks 為新的總 tick 數。
+ * **ramp 進行中重複呼叫 → 忽略**(讓既有 ramp 跑完),見下方 [FIX]。
  *
  * [實測校正 2026-08-17] TotalTk = ticks + 1:
  *   startSoftClamp 呼叫後,main.c 在同一個 20ms iteration 內立刻呼叫 tick20ms → 第一次
  *   遞減發生在同一 tick,若不補 +1 會少一格,實測設 6 只量到 5 tick。加 1 之後
  *   duty 由 initial → 0 的總經過時間 = ticks × 20ms 剛好。
  *
+ * [FIX 2026-08-21] 加上「ramp 進行中則忽略」。呼叫端有每 20ms 重複呼叫的情形
+ *   (bMotorStop 分支、以及 FAULT/倒溜閂鎖狀態每個 tick 都回傳 LOCK)。舊版每次都以
+ *   當時 duty 為新起點重設 TicksLeft → duty 變成等比衰減 (每 tick x 5/6),100ms 的 ramp
+ *   實際拖到約 500ms 才接近 0,也永遠碰不到「TicksLeft 歸零時強制 duty=0」那一步。
+ *
  * setup 成本:一次 32/16 除法 (~18 cycle),每次 LOCK 事件才做一次。
  */
 void emb_pwm_startSoftClamp(uint16_t u16Ticks) {
+    if (s_u16EmbPwmTicksLeft != 0u) {
+        return;  // ramp 進行中 → 忽略,不重設起點
+    }
     if ((u16Ticks == 0u) || (s_u16EmbPwmDuty == 0u)) {
         emb_pwm_hardLock();
         return;

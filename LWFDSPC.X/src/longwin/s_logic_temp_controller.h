@@ -8,7 +8,9 @@
  * 2. 實作一個包含遲滯效應 (Hysteresis) 的多段式狀態機，來決定當前的溫度保護區間。
  * 3. 根據所在的溫度區間，輸出一个對應的 Q15 格式電流限制比例。
  *    - 1.0 (Q15(1.0)) 表示 100% 無限制。
- *    - 0.0 (Q15(0.0)) 表示 0%，完全停止輸出。
+ *    - 最高溫區間 (OVERTEMP) 不輸出 0，而是保留跛行動力 —— 過溫不停車，
+ *      見 LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP。真正的硬停在 90°C 由 main.c 的
+ *      OvertemperatureDetectMOSFET() 負責。
  */
 
 #ifndef S_LOGIC_TEMP_CONTROLLER_H_
@@ -66,7 +68,7 @@ typedef enum {
     LOGIC_TEMP_CONTROLLER_ZONE_LEVEL_3,     // 第三級限流區間
     LOGIC_TEMP_CONTROLLER_ZONE_LEVEL_4,     // 第四級限流區間
     LOGIC_TEMP_CONTROLLER_ZONE_LEVEL_5,     // 第五級限流區間
-    LOGIC_TEMP_CONTROLLER_ZONE_OVERTEMP     // 過溫區間，完全停止輸出
+    LOGIC_TEMP_CONTROLLER_ZONE_OVERTEMP     // 過溫跛行區間：限流 + 限速，**不停車**
 } E_LOGIC_TEMP_CONTROLLER_ZONE_T;
 
 // --- 常數定義 ---
@@ -106,8 +108,20 @@ typedef enum {
 #define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_3 (0.291f)     //  14.6A
 #define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_4 (0.273f)     //  13.7A
 #define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_5 (0.254f)     //  12.7A
-#define LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP (0.0f)    // 0% —— 不是限流,是全切 + EMB 硬夾
-                                                       //   (經 bMotorStop,見 main.c;規範待客戶確認)
+// [2026-08-21 客戶規範] 過溫**不停車**,維持最低動力讓車子能慢慢移到路邊(跛行回家)。
+//   0.12 x 50A = 6A:平地與緩坡可移動,陡坡會失速(此時堵轉保護接手,見 MOTOR_STALL_*)。
+//   ⚠ 不可設 0 —— 那會回到「路中間停死」,且下方限速也失去意義。
+//   ⚠ 最終保護不在這裡:同一顆感測器在 90°C 由 OvertemperatureDetectMOSFET() 直接
+//     uGF.Fault = 1 硬停並閂鎖 (OVERTEMP_MOSFET_90)。本區間只負責 78~90°C 的跛行。
+#define LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP (0.12f)   //  6.0A 跛行動力
+
+// 跛行時的車速上限 (km/h x100)。限速與限流同時做,才能真正降低發熱。
+//   必須高於油門起步速度 LOGIC_THROTTLE_FWD_OUTPUT_MIN (0.82 km/h),否則車動不了。
+#define LOGIC_TEMP_CONTROLLER_LIMP_SPEED_KMHX100 (200)  // 2.00 km/h
+
+#if (LOGIC_TEMP_CONTROLLER_LIMP_SPEED_KMHX100) < 100
+#error "LIMP_SPEED 低於 1.00 km/h: 未高於油門起步速度(0.82 km/h), 跛行時車子會動不了"
+#endif
 
 #define LOGIC_TEMP_CONTROLLER_DEFAULT_CURRENT_ZONE (LOGIC_TEMP_CONTROLLER_ZONE_NORMAL)
 
@@ -128,7 +142,7 @@ int32_t logic_temp_controller_getTemp(void);
  * @brief 更新溫度狀態並獲取當前電流限制比例 (Q15)
  * @details 此為本模組最主要的核心函式，應在主迴圈中定期呼叫。
  * @param u16AdcValue 從 ADC 讀取的 NTC 腳位的原始值
- * @param[out] pbIsOverTemp 指標，用於回傳是否處於控制器過溫狀態 (完全停止輸出)
+ * @param[out] pbIsOverTemp 指標，用於回傳是否處於控制器過溫狀態 (= 跛行模式，不停車)
  * @param[out] pbIsOverLoad 指標，用於回傳是否處於任何有效的過載限流狀態
  * @return int16_t 計算出的允許最大電流比例 (Q15 格式)
  */

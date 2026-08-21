@@ -260,13 +260,10 @@ volatile int16_t g_i16EmbZeroCmdEdgeCnt = 0;
 // 讀取端見 CNRead_Inline 的計數邏輯與主迴圈的 bEmbRollbackDetected 合成。
 // 8-bit / bool 存取原子，不需臨界區。
 volatile bool g_bEmbRollbackArmed = false;
-// [下坡滑動] 「命令歸零後車在加速」的連續確認次數。CNRead_Inline 以霍爾週期比較累加，
-// 20ms 的 EMB 任務讀取。自由滑行的阻力恆為正 → 平路與上坡的週期必然逐步變長，因此
-// 「週期真的變短」等價於「重力已超過全部阻力，車不會自己停」。這是唯一不依賴車速門檻、
-// 也不依賴跨迴圈狀態的判別，故它取代了 V0.20 的武裝旗標 (s_bEmbDownhillArmed，為何移除
-// 見 userparms.h 的 EMB_DOWNHILL_* 說明)。
-// ⚠ 名稱沿用 V0.21 的 NoDecel(當時判準是「週期沒變長」),語意已於 V0.24 改為「在加速」——
-//   舊判準的隱含減速度門檻帶 v² 項,在 3 km/h 附近會把平路自由滑行誤判成沒減速。
+// [下坡滑動] 「命令歸零、有在制動、車卻沒減速」的連續確認次數。CNRead_Inline 以霍爾週期
+// 比較累加，20ms 的 EMB 任務讀取。阻力與制動力都是減速方向,兩者都在卻仍沒減速 → 只剩
+// 重力一種解釋,且與騎士體重、阻力大小、坡度大小都無關。
+// 「有在制動」的閘門是這句話成立的前提,見 userparms.h 的 EMB_DOWNHILL_MIN_BRAKE_CMD。
 // 車速上限閘門 (EMB_DOWNHILL_MIN_PERIOD) 也在 ISR 內一併判斷 —— 計數只在上限以下累加，
 // 因此「本計數達標」已內含「車速夠低、夾煞可接受」。
 // ⚠ 與上面兩個計數器同理：只在霍爾邊緣時更新 → 車靜止時凍結，故 EMB 的 LOCK/RELEASE
@@ -1349,9 +1346,15 @@ int main(void) {
             }
 #endif
 #if CODESW_TEMPERATURE_CONTROLLER_ENABLE
-            if (g_stSystemData.bControllerIsOverTemp) {
-                g_stSystemData.bMotorStop = true;
-            }
+            // [2026-08-21 客戶規範] 控制器過溫**不再停車**，改為跛行:
+            //   電流上限降到 LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP (6A)、車速壓到
+            //   LOGIC_TEMP_CONTROLLER_LIMP_SPEED_KMHX100 (2 km/h,見下方油門上限的夾制)，
+            //   讓駕駛能把車慢慢移到路邊。
+            //   ⚠ 因此**不可**把 bControllerIsOverTemp 併進 bMotorStop —— 那會夾 EMB 並把
+            //     油門命令歸零,車子就動不了。
+            //   最終保護仍在:同一顆感測器 (ADCBUF_TEMPERATURE_MOSFET == ADCBUF_CONTROLLER_TEMP)
+            //     在 90°C 由 OvertemperatureDetectMOSFET() 設 uGF.Fault 硬停並閂鎖。
+            //   A09 警報仍在跛行時發出 (溫控模組內)，LCD 會顯示過溫。
 #endif
             // --- End of Aggregation ---
 #if CODESW_MODBUS_SCHEDULER_ENABLE == 1
@@ -1377,8 +1380,10 @@ int main(void) {
 #if CODESW_EMBRAKER_ENABLE
             // --- [REFACTORED] EMBRAKER logic now uses the master stop flag ---
             if (g_stSystemData.bMotorStop) {
-                // 電池保護或控制器過溫已啟動，強制鎖定電磁剎車(緊急路徑,硬夾)
-                emb_pwm_hardLock();
+                // 電池保護或控制器過溫已啟動，鎖定電磁剎車(緊急路徑,亦為軟夾)。
+                //   本分支每 20ms 都會執行,靠 emb_pwm_startSoftClamp() 的「ramp 進行中則忽略」
+                //   保證 ramp 只跑一次(見 hal/pwm.c)。
+                emb_pwm_startSoftClamp(EMB_SOFT_CLAMP_TICKS);
             } else {
                 // 更新電磁煞車邏輯
 #if CODESW_EMBRAKER_TEST
@@ -1449,12 +1454,11 @@ int main(void) {
                                             !bEmbFlipHoldoff &&
                                             (HallPulsesLatch >= EMB_ROLLBACK_MIN_PULSES);
 
-                // --- [下坡滑動] 命令歸零後車卻在加速 → 立即上鎖 ---
+                // --- [下坡滑動] 命令歸零、有在制動、車卻沒減速 → 立即上鎖 ---
                 //   完整理由見 userparms.h 的 EMB_DOWNHILL_* 說明。三個閘門：
                 //     (1) 命令已歸零   —— g_i16EmbZeroCmdEdgeCnt 的計數閘門天然提供
-                //     (2) 車在加速     —— g_u8EmbNoDecelCnt (ISR 內比較霍爾週期有沒有變短;
-                //                        滑行阻力恆為正 ⇒ 變短就是重力已超過全部阻力。
-                //                        名稱沿用 V0.21 的 NoDecel，語意已於 V0.24 改掉)
+                //     (2) 有制動卻沒減速 —— g_u8EmbNoDecelCnt (ISR 內比較霍爾週期是否變長,
+                //                        並要求速度環確實在出制動扭矩)
                 //     (3) 車速低於上限 —— 同在 ISR 內，以週期下限實作，已內含於 (2) 的累加
                 //   此處只讀 ISR 的結果，再加位移門檻作為雜訊裕度。
                 //   ⚠ V0.20 的武裝旗標 (s_bEmbDownhillArmed) 已移除，**不要加回來**：它的
@@ -1513,23 +1517,12 @@ int main(void) {
 #if !CODESW_MOTOR_LOCK_TEST_ENABLE
                         MotorStallForceOutputZero();
 #endif
-                        // [軟夾／硬夾分派]
-                        //   四個情境走硬夾(立即 0% duty),其餘走軟夾:
-                        //     (1) IBKS(uGF.BrakeSWOn)      駕駛主動命令,語意上要立即
-                        //     (2) bMotorStop                系統安全禁制,不可延遲
-                        //     (3) bEmbRollbackDetected      已滑到 28mm,再軟夾佔用倒溜預算
-                        //     (4) bEmbDownhillSlide         已滑到 26mm,同理
-                        //   (2) 在本 switch 外的 g_stSystemData.bMotorStop 分支已處理硬鎖,
-                        //     但那邊只覆蓋 O_EM_BRAKE 硬體,logic_embraker_update 仍會回傳 LOCK
-                        //     動作跑進本 switch。為保險,(2) 也列入本判斷條件。
-                        //   軟夾只用在**正常停車**路徑:WAITING_TO_LOCK 走完 UVW + SHORT_TO_LOCK_DELAY
-                        //     到期。此時車已停或近停,軟夾無安全代價、只是為了消震動。
-                        if ((uGF.BrakeSWOn == 1) || g_stSystemData.bMotorStop ||
-                            bEmbRollbackDetected || bEmbDownhillSlide) {
-                            emb_pwm_hardLock();
-                        } else {
-                            emb_pwm_startSoftClamp(EMB_SOFT_CLAMP_TICKS);
-                        }
+                        // [2026-08-21] **所有 EMB 夾煞一律軟夾**(客戶決定),不再有硬夾分派。
+                        //   位移帳(最壞情況):倒溜觸發於 52mm,軟夾 100ms 在 30% 坡上再滑約 40mm
+                        //   → 約 95mm,距 1/4 車輪護欄 159mm 仍有 1.6 倍餘裕。
+                        //   ramp 期間偵測是解武裝的(見下方計數器清零),故 EMB_SOFT_CLAMP_TICKS
+                        //   不宜再加大 —— 餘裕已由 3 倍降到 1.6 倍。
+                        emb_pwm_startSoftClamp(EMB_SOFT_CLAMP_TICKS);
                         // [夾煞診斷] 純觀測,不影響控制。只在 LOCK 的**上升緣**記錄(見上方
                         //   bEmbLockEdge)：FAULT 與倒溜閂鎖那兩個分支每個 tick 都回傳 LOCK
                         //   (保持鎖定),不擋掉會把計數器灌爆而失去診斷意義。
@@ -2067,6 +2060,16 @@ void DoControl(void) {
                     u16lThrottleOutputMax = LOGIC_THROTTLE_REV_OUTPUT_MAX;
                     u16lThrottleOutputMin = LOGIC_THROTTLE_REV_OUTPUT_MIN;
                 }
+#if CODESW_TEMPERATURE_CONTROLLER_ENABLE
+                // [跛行] 控制器過溫時把車速壓到 LIMP_SPEED (2 km/h)，讓駕駛能慢慢移到路邊。
+                //   電流上限已由溫控模組降到 6A;限速與限流要一起做才真正降低發熱。
+                if (g_stSystemData.bControllerIsOverTemp) {
+                    uint16_t u16LimpMax = KMHX100_TO_CMD(LOGIC_TEMP_CONTROLLER_LIMP_SPEED_KMHX100);
+                    if (u16lThrottleOutputMax > u16LimpMax) {
+                        u16lThrottleOutputMax = u16LimpMax;
+                    }
+                }
+#endif
 
                 // 更新馬達最後要執行的轉速
                 // 注意：此處呼叫舊的無正負號函式，因此傳入 abs() 值並強制轉型指標
@@ -2931,6 +2934,10 @@ void DoControl(void) {
     void VoltageDetect(void) {
         faultUndervoltage.measure = ADCBUF_VOLTAGE;
     }
+    // ⚠ 本函式與下方 UndervoltageDetect 目前都未被呼叫 (電壓保護由 s_logic_battery 模組負責,
+    //   見 CODESW_BATTERY_PROTECTION_MODULE_ENABLE)。若日後改回舊邏輯，記得補上
+    //   「條件不成立就把 counter 歸零」—— 與 OvertemperatureDetectMOSFET 的 [FIX 2026-08-21]
+    //   同一個問題:沒有 else 歸零時計數器是累計的,零星雜訊會累積成閂鎖故障。
     void OvervoltageDetect(void) {
         faultOvervoltage.measure = ADCBUF_VOLTAGE;
         faultOvervoltage.monitor = (faultOvervoltage.measure >> 6);
@@ -2976,6 +2983,9 @@ void DoControl(void) {
         */
     }
 
+    // 90°C 硬停 + 閂鎖。這是整條溫度保護的最終保底 —— 78°C 起的跛行(限流 6A + 限速 2 km/h)
+    //   若仍壓不住溫度，就由本函式切斷輸出。與跛行共用同一顆感測器
+    //   (ADCBUF_TEMPERATURE_MOSFET == ADCBUF_CONTROLLER_TEMP)。NTC:ADC 值愈小 = 溫度愈高。
     void OvertemperatureDetectMOSFET(void) {
         faultOverTempMOSFET.measure = ADCBUF_TEMPERATURE_MOSFET;
         faultOverTempMOSFET.monitor = (faultOverTempMOSFET.measure >> 6);
@@ -2989,6 +2999,12 @@ void DoControl(void) {
                 FaultFlags.MOSOverHeat = 1;
                 uGF.Fault = 1;
             }
+        } else {
+            // [FIX 2026-08-21] 溫度正常就歸零。舊版沒有這個 else，計數器是「累計」而非
+            //   「連續」—— 整個通電期間任何 20 次落在門檻下的取樣(含 ADC 雜訊)就會累積到
+            //   閂鎖故障。真實過溫會有數千次連續取樣，加上歸零後仍是瞬間跳脫，只是不再
+            //   被零星雜訊累積誤觸。
+            faultOverTempMOSFET.counter = 0;
         }
     }
 
@@ -3126,12 +3142,9 @@ void DoControl(void) {
             //   符號慣例沿用上方 Speed 那行：Direction == DirectionDefault ⇒ 往負方向滾。
             //   飽和在 ±32000 而非讓它回捲 —— 回捲會讓 |cnt| 掃過 0 而漏掉已達標的位移。
             //
-            //   同一個閘門下並行「車在加速判別 + 車速上限」，產出 g_u8EmbNoDecelCnt
-            //   (名稱沿用 V0.21 的 NoDecel，語意已於 V0.24 改為「在加速」)：
-            //   自由滑行的阻力恆為正 ⇒ 平路/上坡的霍爾週期必然逐步變長，「週期變短」就代表
-            //   重力已超過全部阻力、車不會自己停。這是區分「平路正常滑行到停」與「下坡
-            //   溜車」的唯一物理依據，且此推論不含車速項 —— 平路/上坡在任何車速、任何阻力下
-            //   都不可能觸發 (完整理由與參數取值見 userparms.h 的 EMB_DOWNHILL_* 說明)。
+            //   同一個閘門下並行「有制動卻沒減速 + 車速上限」，產出 g_u8EmbNoDecelCnt：
+            //   阻力與制動力都是減速方向,兩者都在卻仍沒減速 ⇒ 只剩重力一種解釋。
+            //   (完整理由與參數取值見 userparms.h 的 EMB_DOWNHILL_* 說明)
             {
                 // 相隔 EMB_DOWNHILL_NODECEL_LOOKBACK 個邊緣的週期環形緩衝。取 6 的倍數使
                 //   比較的兩筆是同一組霍爾狀態轉換，感測器裝配不等距的誤差因此對消。
@@ -3165,21 +3178,18 @@ void DoControl(void) {
                         if (su8EmbPeriodFill < EMB_DOWNHILL_NODECEL_LOOKBACK) {
                             su8EmbPeriodFill++;  // 緩衝未滿，還沒有可比較的對象
                         } else if ((HallPeriod > EMB_DOWNHILL_MIN_PERIOD) &&
-                                   (u16Old > HallPeriod) &&
-                                   ((uint16_t)(u16Old - HallPeriod) >=
-                                    (uint16_t)(u16Old >> EMB_DOWNHILL_NODECEL_TOL_SHIFT))) {
-                            // [V0.24] 週期**真的變短**(超過雜訊裕度 1/2^TOL_SHIFT) = 車在加速
-                            //   = 重力已超過全部阻力,車不會自己停;且車速仍在夾煞可接受的
-                            //   上限以下(週期下限 = 速度上限;上限之上交回 UVW 短路/回充處理)。
-                            // ⚠ 不要改回舊版的「週期沒變長就算沒減速」:那個判準的隱含減速度
-                            //   門檻是 a_th = v²/(2^S x d_LOOKBACK),帶 v² 項 → 車速愈高愈鬆,
-                            //   在 3 km/h 上限附近只有 0.26 m/s²,低於平路自由滑行阻力的量級
-                            //   → 平路 2.6~3.0 km/h 這段會被判成「沒減速」而硬夾(V0.23 實車
-                            //   回報的平地減速頓挫)。改成「必須變短」後判準只剩重力 vs 阻力,
-                            //   平路/上坡在任何車速下結構上都不可能觸發。完整推導見 userparms.h。
-                            // ⚠ 寫成「先比大小再相減」而非「HallPeriod <= u16Old - 容忍」:
-                            //   後者在 16-bit 上會下溢 → 門檻回捲成極大值 → 該速度帶靜默失效。
-                            //   本寫法全程留在 16-bit 且不可能溢位(與倒溜計數同一個紀律)。
+                                   (abs(piOutputOmega.out) >= EMB_DOWNHILL_MIN_BRAKE_CMD) &&
+                                   ((HallPeriod <= u16Old) ||
+                                    ((uint16_t)(HallPeriod - u16Old) <=
+                                     (uint16_t)(u16Old >> EMB_DOWNHILL_NODECEL_TOL_SHIFT)))) {
+                            // When speed command = 0, braking torque > 500 (0.76A), and
+                            // hall period is not getting longer => gravity wins, car won't stop.
+                            //   (1) HallPeriod > MIN_PERIOD    車速在上限以下
+                            //   (2) abs(out) >= MIN_BRAKE_CMD  速度環確實在制動 (前提,見 userparms.h)
+                            //   (3) 週期沒變長(容忍 1/2^TOL)   沒在減速
+                            // [沿革] V0.24 曾把 (3) 改成「必須真的變短」→ 抓不到下坡等速潛行
+                            //   (週期不變),實車滑到 failsafe 才夾 → 改回本式並補上 (2)。
+                            // ⚠ (3) 要先比大小再相減;反寫成 u16Old + 容忍 在 16-bit 會溢位。
                             if (g_u8EmbNoDecelCnt < 255u) {
                                 g_u8EmbNoDecelCnt++;
                             }
