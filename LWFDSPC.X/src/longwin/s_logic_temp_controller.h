@@ -95,14 +95,19 @@ typedef enum {
 #define LOGIC_TEMP_CONTROLLER_RELEASE_OVERTEMP_C (LOGIC_TEMP_CONTROLLER_ACTIVATE_OVERTEMP_C - LOGIC_TEMP_CONTROLLER_HYSTERESIS_C)
 
 // --- 對應各溫度區間的電流限制比例 (浮點數) ---
-// 註: 比例基於額定電流 50A (RATED_CURRENT from codeSw.h) 計算得出
-#define LOGIC_TEMP_CONTROLLER_RATIO_NORMAL (0.35f)     //  16A 
-#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_1 (0.33f)       //  16A
-#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_2 (0.31f)       //  15A
-#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_3 (0.291f)     //  14A
-#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_4 (0.273f)     //  13A
-#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_5 (0.254f)     //  12A
-#define LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP (0.0f)    // 0%
+// 註: 比例基於額定電流 50A (RATED_CURRENT from codeSw.h) 計算得出，即 電流 = 比例 x 50A。
+// [實車驗證 2026-08-21] V0.24 客戶測試:RATIO_NORMAL = 0.35 實測 **18A**、爬坡力 OK，維持不動。
+//   該實測同時驗證了「比例 x 50A」這個換算 (0.35 x 50 = 17.5A，與實測 18A 相符)，
+//   因此下方各級的安培數改用同一算式重算 —— 舊註解每一級都低了約 1A (0.35 標成 16A)，
+//   會讓調機時誤判實際餘量。
+#define LOGIC_TEMP_CONTROLLER_RATIO_NORMAL (0.35f)     //  17.5A (實測 18A，爬坡力 OK)
+#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_1 (0.33f)      //  16.5A
+#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_2 (0.31f)      //  15.5A
+#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_3 (0.291f)     //  14.6A
+#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_4 (0.273f)     //  13.7A
+#define LOGIC_TEMP_CONTROLLER_RATIO_LEVEL_5 (0.254f)     //  12.7A
+#define LOGIC_TEMP_CONTROLLER_RATIO_OVERTEMP (0.0f)    // 0% —— 不是限流,是全切 + EMB 硬夾
+                                                       //   (經 bMotorStop,見 main.c;規範待客戶確認)
 
 #define LOGIC_TEMP_CONTROLLER_DEFAULT_CURRENT_ZONE (LOGIC_TEMP_CONTROLLER_ZONE_NORMAL)
 

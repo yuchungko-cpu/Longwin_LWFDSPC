@@ -91,6 +91,10 @@
       <tr><td><b>下坡判準</b></td><td class="f">userparms.h : EMB_DOWNHILL_NODECEL_*</td>
         <td>由「週期沒變長 = 沒減速」改為「<b>週期必須真的變短 = 車在加速</b>」。
             平路在任何車速下結構上都不可能誤觸(舊判準在 3 km/h 附近會)</td></tr>
+      <tr><td><b>實車參數更新</b><br>(2026-08-21)</td><td class="f">userparms.h / s_logic_embraker.h</td>
+        <td>V0.24 客戶測試:平地 OK、上下坡 OK。<code>EMB_ROLLBACK_REV_EDGES</code> 24→<b>30</b>、
+            <code>EMBRAKER_LOCK_TIMEOUT_MS</code> 1500→<b>1000</b>;
+            溫控 <code>RATIO_NORMAL</code> 0.35 實測 18A、爬坡力 OK 維持不動</td></tr>
       <tr><td><b>夾煞原因觀測</b></td><td class="f">main.c : g_u8EmbLockReason 等</td>
         <td>新增純觀測變數與各原因計數器,事後接 debugger 即可知道停車是走哪條路徑夾的</td></tr>
     </table>
@@ -134,17 +138,21 @@
         <td class="val">300<br>(3 km/h)</td><td class="c">150 ~ 500</td>
         <td><b>下坡夾煞車速上限</b>(km/h×100)。超過此車速本偵測不夾。嫌衝擊大可降到 250 (2.5km/h)</td></tr>
       <tr class="hi"><td><span class="k">主</span></td><td class="f">EMB_ROLLBACK_REV_EDGES</td>
-        <td class="val">24<br>(42 mm)</td><td class="c">8 ~ 45</td>
+        <td class="val">30<br>(52 mm)</td><td class="c">8 ~ 45</td>
         <td><b>上坡倒溜位移門檻</b>(邊緣數,1 邊緣 = 1.75mm)。上限硬性 91(1/4 車輪 = 159mm)<br>
             愈小夾得愈早、動能愈小、翹前輪風險愈低;<b>過小會讓上坡起步被誤鎖</b><br>
-            <b>實車驗證值 24 = 42mm</b>(2026-08-19):16 時上坡起步有時會下滑鎖住</td></tr>
+            <b>實車驗證值 30 = 52mm</b>(2026-08-21)。調校歷程:16(28mm) → 24(42mm) → 30(52mm)，
+            兩次都是為了解「上坡起步下滑就鎖住」</td></tr>
       <tr><td></td><td class="f">EMB_DOWNHILL_SLIDE_EDGES</td>
         <td class="val">27<br>(47 mm)</td><td class="c">27 ~ 45</td>
         <td>下坡位移門檻,<b>推導值</b> = LOOKBACK + CONFIRM = 24+3,設更小無效。<br>
             LOOKBACK 由 12 改為 24(實車驗證:12 時上坡容易鎖住)後自動由 15 變 27</td></tr>
       <tr><td></td><td class="f">EMBRAKER_LOCK_TIMEOUT_MS</td>
-        <td class="val">1500 ms</td><td class="c">1000 ~ 3000</td>
-        <td>命令歸零後多久仍未夾住的 failsafe 逾時。<b>不要為舒適性調它</b>,那是保底</td></tr>
+        <td class="val">1000 ms</td><td class="c">1000 ~ 3000</td>
+        <td>命令歸零後多久仍未夾住的 failsafe 逾時。<b>不要為舒適性放寬它</b>,那是保底;
+            <b>收緊</b>則永遠安全。<br>
+            <b>實車驗證值 1000ms</b>(2026-08-21):由 1500 收回 1000 以縮短下坡滑行距離
+            (1 km/h 時約少 14cm)。V0.24 起 UVW 進鎖不必等減速斜坡,不再需要那 500ms 緩衝</td></tr>
     </table>
   </div>
 
@@ -162,7 +170,9 @@
         <td>加大 <code>EMB_SOFT_CLAMP_TICKS</code> 到 6~10;若仍翹則降低
             <code>EMB_DOWNHILL_MAX_SPEED_KMHX100</code> 300 → 250</td></tr>
       <tr class="hi"><td>上坡點放後倒溜距離過長 / 翹輪</td>
-        <td>縮小 <code>EMB_ROLLBACK_REV_EDGES</code> 16 → 12 → 8(愈小夾得愈早、動能愈小)</td></tr>
+        <td>縮小 <code>EMB_ROLLBACK_REV_EDGES</code>(愈小夾得愈早、動能愈小)。<br>
+            ⚠ 但實車兩次調校都是往**大**的方向走(16 → 24 → 30),因為太小會讓
+            <b>上坡起步的正常下滑被誤鎖</b>。兩個症狀共用同一顆參數,調之前先確認是哪一個</td></tr>
       <tr><td>平路點放油門,煞車會咬住</td>
         <td>V0.24 起下坡偵測在平路<b>結構上不可能觸發</b>,不要再調 TOL_SHIFT。<br>
             請改讀 <code>g_u8EmbLockReason</code>:2 = 逾時 failsafe(停車鏈有路徑失效)、
