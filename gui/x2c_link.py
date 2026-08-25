@@ -68,6 +68,10 @@ REOPEN_MIN_INTERVAL = 8.0
 # 目標端卡死時主機端做什麼都沒用 (清緩衝區、重開埠都碰不到目標端的狀態機)，
 # 所以要停止無謂的重試，直接告訴使用者需要重置控制器電源。
 NOREPLY_WEDGE_LIMIT = 24
+# 連續沒回應到第幾輪時，試著沖洗目標端的 LNet 解析器 (見 _flush_target_inline)。
+# 挑 8 與 16 是為了在 24 輪的放棄門檻之前有兩次機會，而每次沖洗約 110ms ——
+# 太早介入會把偶發的單次讀取失敗當成卡死，太晚就來不及在放棄前試完兩次。
+NOREPLY_FLUSH_AT = (8, 16)
 
 # 連續多少輪都無法讓框架重新對齊，才判定成「ELF 不對版 / 鏈路失效」並封鎖寫入。
 # 給幾輪緩衝的理由：偶發的失步靠清緩衝區就能修好，不該每次都跳紅色橫幅嚇人。
@@ -449,6 +453,31 @@ class Link(threading.Thread):
             self.stop_event.wait(0.005)
         return drained
 
+    def _flush_target_inline(self):
+        """對**已開啟**的連線寫入填充位元組，補完目標端卡住的半截 LNet 框架。
+
+        與 flush_target() 同一個原理，差別是不開新的埠 —— 用現有 session 的 pyserial
+        handle 直接寫。卡住的是目標端解析器在等後續位元組，補完它不需要重開埠、
+        也不需要重新握手，所以 session 內就做得到。
+
+        安全性：填充是 0x00 (不是 SYN)，所以目標端不論處於什麼狀態都不會更糟 ——
+        等 SIZE 就變成 SIZE=0 的空框架 (CRC 失敗、丟棄)，閒置就全部忽略。
+        若目標端是主迴圈整個停了，寫進去的位元組沒人讀，同樣無害。
+        """
+        ser = getattr(getattr(getattr(self._scope, "lnet", None),
+                              "interface", None), "serial", None)
+        if ser is None:
+            return False
+        try:
+            for _ in range(TARGET_FLUSH_CHUNKS):
+                ser.write(TARGET_FLUSH_PAD)
+                ser.flush()
+                time.sleep(TARGET_FLUSH_GAP_S)
+            ser.reset_input_buffer()
+            return True
+        except Exception:  # noqa: BLE001 - 沖洗失敗不該讓復原流程中斷
+            return False
+
     def _recover_sync(self):
         """讓 LNet 框架重新對齊。成功回 True。
 
@@ -542,6 +571,23 @@ class Link(threading.Thread):
 
         # state == "noreply"
         self._noreply_cycles += 1
+        # 在放棄之前先沖洗目標端的 LNet 解析器。
+        #
+        # 原本這條路徑直接叫使用者重置控制器電源，理由是「主機端碰不到目標端的狀態機」
+        # —— 那句話是錯的。目標端可能只是卡在一個半截框架上等後續位元組，而那只需要
+        # 我們往同一個埠寫填充位元組就能補完 (見 flush_target)。
+        # 實機證據: 使用者按「連線」就能恢復，而重新連線做的正是這件事。
+        # 既然不必重開埠也不必重新握手，就沒有理由讓使用者去重置電源。
+        if self._noreply_cycles in NOREPLY_FLUSH_AT:
+            self.post("status",
+                      f"目標端沒有回應（{self._noreply_cycles} 輪）"
+                      f"—— 沖洗其 LNet 解析器後重試")
+            self._flush_target_inline()
+            if self._sentinel_ok():
+                self._noreply_cycles = 0
+                self._set_signature(V.SIGNATURE_EXPECTED, True)
+                self.post("status", "目標端已恢復回應（沖洗解析器後）")
+            return
         if self._noreply_cycles < NOREPLY_WEDGE_LIMIT or self._wedge_reported:
             return
         # 目標端連續幾秒完全不回話。主機端已經沒有牌可以打了 —— 清緩衝區與重開埠
@@ -564,10 +610,13 @@ class Link(threading.Thread):
                       "請先跑 check_link.py --scan：它會逐一試 baud 並告訴你哪一個通。")
             return
         self.post("error", head +
-                  "曾經讀得到、後來停止回應 -> 目標端卡死。\n"
-                  "主機端無法自行復原 —— 清收接緩衝區與重開序列埠都只動到 PC 這一側，"
-                  "碰不到目標端 X2CScope 的狀態機。\n"
-                  "**請重置控制器電源。** 之後按「連線」重新連上即可。\n"
+                  f"曾經讀得到、後來停止回應。已在第 "
+                  f"{'、'.join(str(n) for n in NOREPLY_FLUSH_AT)} 輪沖洗過目標端的 "
+                  "LNet 解析器，仍然沒有回應。\n"
+                  "**先按「斷線」再按「連線」試一次** —— 重新連線會重開序列埠並重新握手，"
+                  "這是比沖洗更強的手段，實機上通常一次就恢復。\n"
+                  "重連也無效才需要重置控制器電源 (那代表目標端主迴圈本身停了，"
+                  "X2CScope_Update 沒有被呼叫，主機端做什麼都沒用)。\n"
                   "已知觸發條件: Scope 讀回在中途失敗 (pyx2cscope 會吞掉失敗的傳輸區塊"
                   "並繼續，目標端可能因此卡在「還要再送 N 個位元組」的狀態)。\n"
                   "降低發生機率: 取樣分頻調大、通道數減少、或先停用 Modbus 儀表。")
