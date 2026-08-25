@@ -382,6 +382,8 @@ class App(tk.Tk):
         self.scanning = False
         self.paused = False
         self.scope_capturing = False
+        # 已呼叫 stop() 但執行緒還沒結束的舊 link，見 _watch_closing()。
+        self._closing_link = None
         self._writes_permitted = False
         self._counter_base = {}       # 手動基準 (「計數器歸零」按鈕)
         self._connect_base = {}       # 自動基準，連線後第一輪掃描完成時記下
@@ -738,6 +740,12 @@ class App(tk.Tk):
     def connect(self):
         if self.link is not None or self.scanning:
             return
+        # 上一條 link 還在收尾就不能開新的 —— 埠還在它手上。按鈕平常是鎖住的，
+        # 這裡再擋一次是因為 Enter 鍵或指令列都繞得過按鈕狀態。
+        if self._closing_link is not None and self._closing_link.is_alive():
+            self.status.set("上一次連線還在關閉序列埠，請稍候 …")
+            return
+        self._closing_link = None
         # AUTO 走自己的掃描而不是交給 pyx2cscope 的 port="AUTO"：兩者都做真正的
         # LNet 握手，但 pyx2cscope 那條路徑沒有任何進度回報，最壞情況會讓畫面
         # 靜靜卡十幾秒；而且它不會跳過藍牙埠，開一個沒連線的藍牙埠可能卡更久。
@@ -766,6 +774,10 @@ class App(tk.Tk):
         if self.link is None:
             return
         self.link.stop()
+        # stop() 只設旗標。worker 要跑到 finally 才會 X2CScope.disconnect() 關掉序列埠，
+        # 而它可能正卡在一次讀取裡。埠沒關之前重連一定失敗 (Windows: Access is denied)，
+        # 所以要等執行緒真的結束 —— 而不是讓使用者按下「連線」再吃一個看不懂的錯誤。
+        self._closing_link = self.link
         self.link = None
         self.connected = False
         self.writes_allowed = self._writes_permitted = False
@@ -778,9 +790,25 @@ class App(tk.Tk):
         self._sync_write_state()
         self.connect_btn.configure(text="連線")
         self.scope_btn.configure(state="disabled")
-        self.status.set("已斷線")
         self.rate.set("輪詢 -- Hz")
         self.link_info.set("")
+        # 擷取狀態跟著這次連線作廢，否則斷線時若正在擷取，捲動圖會永遠凍住。
+        self.on_scope_active(False)
+        self._watch_closing()
+
+    def _watch_closing(self):
+        """等 worker 結束、序列埠真的釋放，期間把「連線」鈕鎖住並說明在等什麼。"""
+        link = self._closing_link
+        if link is None:
+            return
+        if link.is_alive():
+            self.connect_btn.configure(state="disabled")
+            self.status.set("關閉序列埠中 …")
+            self.after(60, self._watch_closing)
+            return
+        self._closing_link = None
+        self.connect_btn.configure(state="normal")
+        self.status.set("已斷線")
 
     def _interval_ms(self):
         try:
@@ -809,7 +837,13 @@ class App(tk.Tk):
     def drain(self):
         try:
             while True:
-                kind, payload = self.events.get_nowait()
+                kind, payload, token = self.events.get_nowait()
+                # 丟掉已被取代的 link 發出的事件。斷線後 worker 可能還卡在一次序列埠
+                # 讀取裡 (pyserial 逐位元組 timeout=1s)，之後才發出 "disconnected"
+                # ——那時使用者可能已經重新連線了，照收會把新連線的狀態清掉。
+                # token 為 None 的是埠掃描與 ELF 解析，不屬於任何 link，一律接受。
+                if token is not None and token is not getattr(self.link, "token", None):
+                    continue
                 self._dispatch(kind, payload)
         except queue.Empty:
             pass
@@ -1263,8 +1297,11 @@ class App(tk.Tk):
         if self._tick is not None:
             self.after_cancel(self._tick)
             self._tick = None
-        if self.link is not None:
-            self.link.stop()
+        # 兩條都要停。_closing_link 是還在收尾的舊 link —— 漏掉它的話關窗後那個
+        # daemon 執行緒還抓著序列埠，直到行程真的結束為止。
+        for link in (self.link, self._closing_link):
+            if link is not None:
+                link.stop()
         self.destroy()
 
 

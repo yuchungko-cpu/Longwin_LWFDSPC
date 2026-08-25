@@ -103,6 +103,14 @@ class Link(threading.Thread):
         self.events = events
         self.commands = queue.Queue()
         self.stop_event = threading.Event()
+        # 這個 link 實例的身分標記，跟著每個事件一起送出去。
+        #
+        # 為什麼需要：stop() 只設旗標就回來，worker 可能還卡在一次序列埠讀取裡
+        # (pyserial 逐位元組 timeout=1s)，之後才會跑到 finally 發出 "disconnected"。
+        # 那個事件是**過期**的 —— 若使用者這時已經重新連線，它會把新連線的狀態清掉
+        # (link=None、按鈕變回「連線」)，而新的 worker 還活著抓著埠不放，結果就是
+        # 之後怎麼按都連不上。GUI 靠這個標記把過期事件丟掉。
+        self.token = object()
 
         self._scope = None
         self._handles = {}
@@ -143,7 +151,7 @@ class Link(threading.Thread):
 
     # -- worker 內部 -------------------------------------------------------
     def post(self, kind, payload=None):
-        self.events.put((kind, payload))
+        self.events.put((kind, payload, self.token))
 
     def run(self):
         try:
@@ -277,7 +285,18 @@ class Link(threading.Thread):
         return value
 
     def _read_many(self, names):
-        return {name: self._read_one(name) for name in names}
+        """逐顆讀，但每顆之前先看一眼停止旗標。
+
+        沒有這個檢查的話，「斷線」最壞情況要等幾十秒才生效：一個週期最多讀約 50 顆
+        變數，目標端沒回應時每顆都會卡滿 pyserial 的 1 秒 timeout，而旗標本來只在
+        週期之間檢查。使用者會看著「關閉序列埠中 …」一直等，然後合理地認為程式壞了。
+        """
+        values = {}
+        for name in names:
+            if self.stop_event.is_set():
+                break
+            values[name] = self._read_one(name)
+        return values
 
     # -- 框架對齊 ----------------------------------------------------------
     def _sentinel_state(self):
@@ -1060,6 +1079,7 @@ class DemoLink(threading.Thread):
         self._scope_continuous = False
         self._scope_active_reported = False
         self._scope_next_at = 0.0
+        self.token = object()
 
     submit = Link.submit
     stop = Link.stop
@@ -1397,9 +1417,9 @@ def load_elf_scalars_async(elf, events):
     """
     def work():
         try:
-            events.put(("elf_scalars", V.elf_scalar_variables(elf)))
+            events.put(("elf_scalars", V.elf_scalar_variables(elf), None))
         except Exception as exc:  # noqa: BLE001 - 回報到 GUI
-            events.put(("error", f"無法解析 ELF 符號表: {exc}"))
+            events.put(("error", f"無法解析 ELF 符號表: {exc}", None))
 
     threading.Thread(target=work, daemon=True, name="elf-scalars").start()
 
@@ -1487,19 +1507,19 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
     """
     def work():
         ports = candidate_ports(include_bluetooth)
-        events.put(("scan_begin", ports))
+        events.put(("scan_begin", ports, None))
         rates = [baud] + ([V.LEGACY_BAUD] if baud != V.LEGACY_BAUD else [])
         for rate in rates:
             legacy = rate != baud
             for port, desc in ports:
                 label = f"{desc}  @{rate}" + ("  (退回舊 baud)" if legacy else "")
-                events.put(("scan_step", (port, label, "probing")))
+                events.put(("scan_step", (port, label, "probing"), None))
                 info = probe_port(port, rate)
-                events.put(("scan_step", (port, label, "found" if info else "no-reply")))
+                events.put(("scan_step", (port, label, "found" if info else "no-reply"), None))
                 if info:
                     # 找到就停：接著要用它連線，繼續掃只是讓人多等。
-                    events.put(("scan_done", [(port, desc, info, rate)]))
+                    events.put(("scan_done", [(port, desc, info, rate)], None))
                     return
-        events.put(("scan_done", []))
+        events.put(("scan_done", [], None))
 
     threading.Thread(target=work, daemon=True, name="port-scan").start()
