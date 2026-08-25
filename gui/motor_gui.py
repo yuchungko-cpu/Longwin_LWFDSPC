@@ -470,6 +470,10 @@ class App(tk.Tk):
         header = ttk.Frame(self, padding=(14, 10, 14, 6))
         header.pack(fill="x")
         ttk.Label(header, text="LWFDSPC 主機端診斷", style="Title.TLabel").pack(side="left")
+        # 版本要在**畫面內**，不能只放視窗標題列：回報問題附的截圖常常把標題列裁掉，
+        # 而「你跑的是哪一版」是支援時第一件要問的事。
+        ttk.Label(header, text=V.GUI_VERSION, style="Muted.TLabel",
+                  font=("Consolas", 9)).pack(side="left", padx=(6, 0))
         ttk.Label(header, textvariable=self.status, style="Muted.TLabel").pack(side="left", padx=16)
         ttk.Label(header, textvariable=self.rate, style="Muted.TLabel",
                   font=("Consolas", 9)).pack(side="right")
