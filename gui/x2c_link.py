@@ -14,6 +14,7 @@ Component: HOST TOOLING
 """
 
 import contextlib
+import gc
 import logging
 import queue
 import threading
@@ -101,6 +102,10 @@ OPEN_RETRY_WAIT_S = 0.5
 TARGET_FLUSH_PAD = b"\x00" * 96
 TARGET_FLUSH_CHUNKS = 8
 TARGET_FLUSH_GAP_S = 0.01     # 目標端 RX FIFO 只有 128 byte，要留時間讓它消化
+
+# probe_port() 的第三種結果：埠開不起來 (被別的程式抓著)，不是「目標沒回應」。
+# 用一個獨特物件而不是字串，避免跟成功時回傳的裝置資訊字串混淆。
+PORT_BUSY = object()
 
 
 def _is_port_busy(exc):
@@ -242,43 +247,62 @@ class Link(threading.Thread):
         # 埠被占用要重試，不能一次就放棄。前一個行程結束時，卡在 ReadFile 裡的
         # daemon 執行緒要等滿 pyserial 的 timeout 才會死，這段時間埠還在它手上 ——
         # 使用者關掉程式馬上重開就會撞上。等一下就好了，不該叫人去查 USB 線。
-        last_exc = None
+        # ⚠ 只留字串與旗標，**絕對不要把例外物件留到下一次重試**。
+        #
+        # X2CScope 的建構子裡 LNet.__init__ 會呼叫 interface.start() 開埠，之後才做
+        # 握手；握手失敗時例外一路拋出來，而**埠已經開著**，唯一的參照在 traceback
+        # 的框架裡 (frame -> self -> interface -> serial)。把例外物件留著就等於把那個
+        # 開著的埠留著 —— 於是下一次重試、以及 flush_target()，全部拿到
+        # "Access is denied"，最後還會回報「被其他程式占用」，指向一個不存在的程式。
+        # (實測: 留住例外時，第 2、3 次重試開始的瞬間前一次的埠仍開著。)
+        last_msg = None
+        last_busy = False
         for attempt in range(OPEN_RETRY_ATTEMPTS):
             if self.stop_event.is_set():
                 return False
             try:
                 self._scope = X2CScope(port=self.port, baud_rate=self.baud,
                                        elf_file=self.elf)
-                last_exc = None
+                last_msg = None
                 break
             except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                if attempt == OPEN_RETRY_ATTEMPTS - 1:
-                    break
-                if _is_port_busy(exc):
-                    self.post("status",
-                              f"{self.port} 被占用，等待釋放 … "
-                              f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
-                    self.stop_event.wait(OPEN_RETRY_WAIT_S)
-                else:
-                    # 埠開得起來但握手失敗 —— 目標端可能停在一個半截 LNet 框架上，
-                    # 這時我們的握手會被當成那個假框架的尾巴吃掉。沖洗後再試。
-                    # 見 flush_target()：這正是「只能重置控制器電源」的那個狀態。
-                    self.post("status",
-                              f"握手無回應，沖洗目標端後重試 … "
-                              f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
-                    flush_target(self.port, self.baud)
+                last_msg, last_busy = str(exc), _is_port_busy(exc)
+                del exc
+            # ---- 一定要在 except 區塊**外面**才做善後 ----------------------
+            # 在 except 裡面時，例外狀態還被解譯器持有 -> traceback -> 框架 ->
+            # interface -> 開著的序列埠。所以那時候呼叫 flush_target() 只會拿到
+            # Access is denied，然後被它自己的 except 吞掉 —— 沖洗**靜靜地變成空操作**，
+            # 測試看起來會過，實機上完全沒作用。
+            #
+            # gc.collect() 也一樣要在這裡：traceback 與框架互相參照形成循環，
+            # refcount 收不掉，要跑 GC 才會觸發 pyserial 的 finalizer 把埠關掉。
+            gc.collect()
+            if attempt == OPEN_RETRY_ATTEMPTS - 1:
+                break
+            if last_busy:
+                self.post("status",
+                          f"{self.port} 被占用，等待釋放 … "
+                          f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
+                self.stop_event.wait(OPEN_RETRY_WAIT_S)
+            else:
+                # 埠開得起來但握手失敗 —— 目標端可能停在一個半截 LNet 框架上，
+                # 這時我們的握手會被當成那個假框架的尾巴吃掉。沖洗後再試。
+                # 見 flush_target()：這正是「只能重置控制器電源」的那個狀態。
+                self.post("status",
+                          f"握手無回應，沖洗目標端後重試 … "
+                          f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
+                flush_target(self.port, self.baud)
 
-        if last_exc is not None:
-            if _is_port_busy(last_exc):
+        if last_msg is not None:
+            if last_busy:
                 self.post("error",
-                          f"{self.port} 被其他程式占用: {last_exc}\n"
+                          f"{self.port} 被其他程式占用: {last_msg}\n"
                           "常見原因: 這支 GUI 的另一個視窗還開著、check_link.py "
                           "還在跑、或是上一個行程尚未完全結束 (等幾秒再試)。"
                           "也檢查有沒有終端機軟體 (PuTTY / 序列埠監控) 開著同一個埠。")
             else:
                 self.post("error",
-                          f"無法開啟連線: {last_exc}\n"
+                          f"無法開啟連線: {last_msg}\n"
                           f"已沖洗目標端並重試 {OPEN_RETRY_ATTEMPTS - 1} 次仍無回應。\n"
                           f"檢查: 板子有供電、USB 線、baud 是否為 {self.baud} "
                           "(diagnostics_x2cscope.c 的 X2C_BAUD_TARGET)，"
@@ -1587,14 +1611,19 @@ def probe_port(port, baud=V.DEFAULT_BAUD):
     from mchplnet.lnet import LNet
 
     interface = None
+    busy = False
     try:
         interface = InterfaceFactory.get_interface(
             InterfaceType.SERIAL, port=port, baud_rate=baud)
         lnet = LNet(interface)
         info = lnet.get_device_info()
         return str(info) if info is not None else None
-    except Exception:  # noqa: BLE001 - 掃描時每一種失敗都只代表「不是這個埠」
-        return None
+    except Exception as exc:  # noqa: BLE001 - 掃描時失敗只代表「不是這個埠」
+        # 「開不了埠」與「沒回應」是完全不同的兩件事，之前都吞成同一個 None：
+        # 於是被別的程式抓著的埠會被回報成「無回應」，橫幅接著叫使用者去查 USB 線
+        # 和 CODESW —— 完全指錯方向。實機上就是這樣把 COM15 被占用誤判掉的。
+        busy = _is_port_busy(exc)
+        return PORT_BUSY if busy else None
     finally:
         if interface is not None:
             try:
@@ -1609,7 +1638,9 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
     事件序列：
         ("scan_begin", [(port, desc), ...])
         ("scan_step",  (port, desc, "probing" | "found" | "no-reply"))
-        ("scan_done",  [(port, desc, device_info, baud), ...])
+        ("scan_step",  (port, desc, "busy"))          # 埠開不起來，等於沒試到
+        ("scan_done",  {"found": [(port, desc, device_info, baud), ...],
+                        "busy":  [port, ...]})
 
     一顆一顆回報而不是掃完才說話，是因為最壞情況要等十幾秒 —— 沒有進度的話
     使用者只會看到畫面卡住，然後以為工具壞了。
@@ -1622,6 +1653,8 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
         ports = candidate_ports(include_bluetooth)
         events.put(("scan_begin", ports, None))
 
+        busy_ports = set()
+
         def sweep(rate, note, flush=False):
             for port, desc in ports:
                 label = f"{desc}  @{rate}{note}"
@@ -1629,11 +1662,19 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
                 if flush:
                     flush_target(port, rate)
                 info = probe_port(port, rate)
+                if info is PORT_BUSY:
+                    # 被占用的埠**沒有被排除**。回報成「無回應」會讓使用者以為
+                    # 那邊已經試過了，於是往板子/USB 線的方向白找。
+                    busy_ports.add(port)
+                    events.put(("scan_step", (port, label, "busy"), None))
+                    continue
                 events.put(("scan_step",
                             (port, label, "found" if info else "no-reply"), None))
                 if info:
                     # 找到就停：接著要用它連線，繼續掃只是讓人多等。
-                    events.put(("scan_done", [(port, desc, info, rate)], None))
+                    events.put(("scan_done",
+                                {"found": [(port, desc, info, rate)],
+                                 "busy": sorted(busy_ports)}, None))
                     return True
             return False
 
@@ -1660,6 +1701,7 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
             if sweep(baud, "  (清除舊 baud 造成的汙染)", flush=True):
                 return
 
-        events.put(("scan_done", [], None))
+        # 被占用的埠要跟著結果一起回報 —— 它是「沒試到」，不是「試過沒有」。
+        events.put(("scan_done", {"found": [], "busy": sorted(busy_ports)}, None))
 
     threading.Thread(target=work, daemon=True, name="port-scan").start()

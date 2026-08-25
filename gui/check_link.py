@@ -20,8 +20,8 @@ from pathlib import Path
 
 import serial.tools.list_ports
 
-from x2c_link import (candidate_ports, flush_target, force_utf8_console,
-                      probe_port)
+from x2c_link import (PORT_BUSY, candidate_ports, flush_target,
+                      force_utf8_console, probe_port)
 from x2c_vars import (
     ALL_VARS,
     BATTERY_STATUS,
@@ -87,6 +87,7 @@ def scan_ports(baud, include_bluetooth=False):
     if others:
         rounds.append((baud, " (清除其他 baud 造成的汙染)", True))
     print(f"掃描 {len(ports)} 個埠 x {len(rounds)} 輪，每次最多約 2 秒 …\n")
+    busy = []
     for rate, note, flush in rounds:
         print(f"  --- @{rate} baud{note} ---")
         for device, desc in ports:
@@ -94,6 +95,12 @@ def scan_ports(baud, include_bluetooth=False):
             if flush:
                 flush_target(device, rate)
             info = probe_port(device, rate)
+            if info is PORT_BUSY:
+                # 被占用**不等於**排除掉了 —— 裝置可能就在這個埠上，只是現在開不起來。
+                # (PORT_BUSY 是個物件，truthy，所以一定要在 `if info` 之前擋掉。)
+                print("開不起來 — 被其他程式占用")
+                busy.append(device)
+                continue
             if info:
                 print("有回應 ✓")
                 print(f"\n[ OK ] 找到 X2CScope 裝置: {device} @ {rate} baud")
@@ -105,6 +112,15 @@ def scan_ports(baud, include_bluetooth=False):
                     print(f"       在那之前請用 --baud {rate} 執行本工具與 GUI。")
                 return device
             print("無回應")
+    if busy:
+        # 排在最前面：這件事可以馬上動手解決，而下面那些檢查項目全是白費工。
+        uniq = sorted(set(busy))
+        print(f"\n[FAIL] 這些序列埠開不起來，被其他程式占用: {', '.join(uniq)}")
+        print("       **它們沒有被排除** —— 裝置可能就在其中一個上面。先關掉占用者:")
+        print("       * motor_gui.py 的視窗還開著")
+        print("       * 另一個 check_link.py 還在跑")
+        print("       * 終端機軟體 (PuTTY / 序列埠監控) 開著同一個埠")
+        return None
     print("\n[FAIL] 所有埠 x 所有輪次都沒有回應 X2CScope 的 LNet 握手。")
     print("       baud 已經排除，卡住的半截框架也沖洗過了，所以問題在別處。檢查:")
     print("       * 板子有供電、USB 線接好")

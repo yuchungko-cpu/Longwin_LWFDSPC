@@ -1008,21 +1008,34 @@ class App(tk.Tk):
     def on_scan_step(self, payload):
         port, desc, state = payload
         label = {"probing": "探測中 …", "found": "有回應 ✓",
-                 "no-reply": "無回應"}.get(state, state)
+                 "no-reply": "無回應",
+                 "busy": "開不起來 (被其他程式占用)"}.get(state, state)
         self.status.set(f"{port}  {desc}  —  {label}")
 
-    def on_scan_done(self, found):
+    def on_scan_done(self, payload):
         self.scanning = False
         self.scan_btn.configure(state="normal")
         connect_next, self._connect_after_scan = self._connect_after_scan, False
+        found = payload.get("found") or []
+        busy = payload.get("busy") or []
         if not found:
             # 只列真正探測過的埠。把跳過的藍牙埠也算進「已試過」會讓人以為那邊
             # 已經排除掉了，於是漏掉「東西其實接在藍牙埠上」這條可能。
-            tried = ", ".join(self._scan_candidates) or "(無)"
+            # 被占用的埠同理 —— 它根本沒被探測到，不能算在「已排除」裡。
+            tried = ", ".join(p for p in self._scan_candidates
+                              if p not in busy) or "(無)"
             skipped = [port for port, _desc in list_serial_ports()
                        if port not in self._scan_candidates]
-            message = ("掃描完成，沒有任何序列埠回應 X2CScope 的 LNet 握手。\n"
-                       f"已探測: {tried}\n")
+            if busy:
+                # 這一段要排在最前面：它是可以馬上動手解決的，而下面那些檢查項目
+                # (供電、USB 線、CODESW) 在這種情況下全都是白費工。
+                message = (f"以下序列埠開不起來，被其他程式占用: {', '.join(busy)}\n"
+                           "**這些埠沒有被排除** —— 裝置可能就在其中一個上面。\n"
+                           "先關掉占用它的程式: 這支 GUI 的另一個視窗、還在跑的 "
+                           "check_link.py、或終端機軟體 (PuTTY / 序列埠監控)。\n")
+            else:
+                message = "掃描完成，沒有任何序列埠回應 X2CScope 的 LNet 握手。\n"
+            message += f"已探測: {tried}\n"
             if skipped:
                 message += (f"已跳過 (藍牙虛擬埠): {', '.join(skipped)}"
                             "  —— 需要一併試的話加 --include-bluetooth\n")
@@ -1032,11 +1045,12 @@ class App(tk.Tk):
             # 「連線」就會把它換成這張橫幅 —— 於是每次都只剩「找不到裝置」可看。
             if self._last_link_error:
                 message += f"上次掉線的原因: {self._last_link_error}\n"
-            message += ("檢查: 板子有供電、USB 線，以及 codeSw.h 的 "
-                        "CODESW_X2C_SCOPE_ENABLE 仍為 1。"
-                        "注意 X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1。")
+            if not busy:
+                message += ("檢查: 板子有供電、USB 線，以及 codeSw.h 的 "
+                            "CODESW_X2C_SCOPE_ENABLE 仍為 1。"
+                            "注意 X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1。")
             self.show_banner(message)
-            self.status.set("掃描完成 — 找不到裝置")
+            self.status.set("掃描完成 — 埠被占用" if busy else "掃描完成 — 找不到裝置")
             return
         port, desc, _info, baud = found[0]
         self.port_var.set(port)
