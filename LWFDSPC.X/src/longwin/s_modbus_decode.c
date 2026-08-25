@@ -422,7 +422,7 @@ void modbusDecode_encodeGuiSettings(U_MODBUS_PC_GUI_DATA *pDest,
 
     //
     // Block 4: FW Version (Addr 0x0015) — 直接用韌體版本巨集,不依賴未賦值的來源欄位。
-    // 格式: (Category<<8)|(Major<<4)|Minor;目前 V0.15 = 0x0015 (見 s_modbus_decode.h)。
+    // 格式: (Category<<8)|(Major<<4)|Minor;目前 V0.25 = 0x0025 (見 s_modbus_decode.h)。
     uint16_t u16Version = ((uint16_t)FW_VER_CATEGORY << 8) | ((uint16_t)FW_VER_MAJOR << 4) | FW_VER_MINOR;
     pDest->u16Regs[0x15] = u16Version;
 

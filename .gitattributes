@@ -1,5 +1,11 @@
 * text=auto
 
+# Windows 批次檔一定要 CRLF：cmd.exe 對 LF-only 檔案的 label / goto / call
+# 處理不可靠 (run_gui.bat 用了 `call :try` 與 `goto`)。eol=crlf 保證簽出時是 CRLF，
+# 不管在哪個平台、core.autocrlf 設成什麼。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Source and project text files
 *.c text
 *.h text

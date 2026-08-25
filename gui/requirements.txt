@@ -1,0 +1,18 @@
+# LWFDSPC 主機端工具 (gui/)
+#
+# Python 3.10 ~ 3.14 (64-bit)。這個範圍不是我們挑的，是 pyx2cscope / mchplnet 的
+# metadata 寫死的 (Requires-Python: >=3.10,<3.15) —— 裝 3.9 或 3.15 pip 會直接拒絕。
+# 本工具自己的程式碼只用到 3.7 等級的語法與 API，所以下限完全來自相依套件。
+# 實測驗證環境: Python 3.14.7 (Tcl/Tk 9.0)；Tk 8.6 (Python 3.12) 亦相容。
+#
+# 安裝時務必勾選 "tcl/tk and IDLE" (python.org 安裝檔預設已勾)。
+# 沒有 tkinter 的散布版 (embeddable zip、部分 conda 環境) 開不起 GUI。
+#
+# pyserial 不用列 —— pyx2cscope 會帶進來。
+
+# X2CScope 主機端協定 + ELF/DWARF 解析。0.7.1 實測可用。
+pyx2cscope>=0.7.1
+
+# Scope 擷取視窗的繪圖 (縮放/平移/存圖)。儀表板的即時捲動圖是 tkinter Canvas
+# 自繪，不用 matplotlib。
+matplotlib>=3.8
