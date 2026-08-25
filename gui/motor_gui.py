@@ -388,6 +388,8 @@ class App(tk.Tk):
         self.scope_capturing = False
         # 已呼叫 stop() 但執行緒還沒結束的舊 link，見 _watch_closing()。
         self._closing_link = None
+        # 最後一次鏈路錯誤，跨連線保留 —— 掉線原因不能被下一張橫幅蓋掉。
+        self._last_link_error = ""
         self._writes_permitted = False
         self._counter_base = {}       # 手動基準 (「計數器歸零」按鈕)
         self._connect_base = {}       # 自動基準，連線後第一輪掃描完成時記下
@@ -857,7 +859,8 @@ class App(tk.Tk):
         if kind == "status":
             self.status.set(payload)
         elif kind == "error":
-            self.status.set(payload.splitlines()[0])
+            self._last_link_error = str(payload).splitlines()[0]
+            self.status.set(self._last_link_error)
             self.show_banner(payload)
         elif kind == "connected":
             self.on_connected(payload)
@@ -1023,6 +1026,12 @@ class App(tk.Tk):
             if skipped:
                 message += (f"已跳過 (藍牙虛擬埠): {', '.join(skipped)}"
                             "  —— 需要一併試的話加 --include-bluetooth\n")
+            message += (f"已試過 {self.args.baud} 與 {V.LEGACY_BAUD} baud，"
+                        "並沖洗過目標端卡住的半截 LNet 框架。\n")
+            # 掉線的原因不能被掃描結果蓋掉。那句話往往是唯一的線索，而使用者按下
+            # 「連線」就會把它換成這張橫幅 —— 於是每次都只剩「找不到裝置」可看。
+            if self._last_link_error:
+                message += f"上次掉線的原因: {self._last_link_error}\n"
             message += ("檢查: 板子有供電、USB 線，以及 codeSw.h 的 "
                         "CODESW_X2C_SCOPE_ENABLE 仍為 1。"
                         "注意 X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1。")

@@ -94,6 +94,14 @@ SCOPE_MIN_COMPLETENESS = 0.98
 OPEN_RETRY_ATTEMPTS = 3
 OPEN_RETRY_WAIT_S = 0.5
 
+# 沖洗目標端 LNet 解析器用的填充。見 flush_target() 的說明。
+# 一個 LNet 框架的 SIZE 最大 255，加上填充位元組 (0x55/0x02 後面會插一個 0x00) 最壞
+# 情況約兩倍 —— 8 x 96 = 768 byte 有足夠餘裕補完任何一個半截框架。
+# 內容是 0x00：不能用 0x55，那是 SYN，補完的瞬間會被當成新框架的開頭再卡一次。
+TARGET_FLUSH_PAD = b"\x00" * 96
+TARGET_FLUSH_CHUNKS = 8
+TARGET_FLUSH_GAP_S = 0.01     # 目標端 RX FIFO 只有 128 byte，要留時間讓它消化
+
 
 def _is_port_busy(exc):
     """判斷例外是不是「埠被占用」。
@@ -245,12 +253,21 @@ class Link(threading.Thread):
                 break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if not _is_port_busy(exc) or attempt == OPEN_RETRY_ATTEMPTS - 1:
+                if attempt == OPEN_RETRY_ATTEMPTS - 1:
                     break
-                self.post("status",
-                          f"{self.port} 被占用，等待釋放 … "
-                          f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
-                self.stop_event.wait(OPEN_RETRY_WAIT_S)
+                if _is_port_busy(exc):
+                    self.post("status",
+                              f"{self.port} 被占用，等待釋放 … "
+                              f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
+                    self.stop_event.wait(OPEN_RETRY_WAIT_S)
+                else:
+                    # 埠開得起來但握手失敗 —— 目標端可能停在一個半截 LNet 框架上，
+                    # 這時我們的握手會被當成那個假框架的尾巴吃掉。沖洗後再試。
+                    # 見 flush_target()：這正是「只能重置控制器電源」的那個狀態。
+                    self.post("status",
+                              f"握手無回應，沖洗目標端後重試 … "
+                              f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
+                    flush_target(self.port, self.baud)
 
         if last_exc is not None:
             if _is_port_busy(last_exc):
@@ -262,7 +279,9 @@ class Link(threading.Thread):
             else:
                 self.post("error",
                           f"無法開啟連線: {last_exc}\n"
-                          "檢查: 板子有供電、USB 線、COM port 正確，"
+                          f"已沖洗目標端並重試 {OPEN_RETRY_ATTEMPTS - 1} 次仍無回應。\n"
+                          f"檢查: 板子有供電、USB 線、baud 是否為 {self.baud} "
+                          "(diagnostics_x2cscope.c 的 X2C_BAUD_TARGET)，"
                           "以及 codeSw.h 的 CODESW_X2C_SCOPE_ENABLE 仍為 1。"
                           "注意 X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1。")
             return False
@@ -1515,6 +1534,48 @@ def candidate_ports(include_bluetooth=False):
     return sorted(ports, key=rank)
 
 
+def flush_target(port, baud, attempts=TARGET_FLUSH_CHUNKS):
+    """把目標端 LNet 解析器卡住的半截框架沖掉。回傳實際送出的位元組數。
+
+    為什麼會卡住：LNet 框架是 SYN(0x55) + SIZE + NODE + DATA + CRC，而目標端的解析器
+    (在 libx2cscope_33ck.a 裡，無原始碼) 認了 SYN 之後就**等滿 SIZE 個位元組**。
+    只要線上出現過一個 0x55 後面跟著一個大數字，它就會停在那裡等最多 255 個位元組 ——
+    而接下來每一次正常握手的位元組都被當成那個假框架的尾巴吃掉，於是永不回應。
+
+    最容易製造出這種情形的，是**用錯的 baud 去探測**：對跑 230400 的目標送 115200
+    的位元流，收到的就是一串框架錯誤的垃圾，其中出現 0x55 幾乎是必然。
+
+    所以這裡在**正確的 baud** 上送足夠多的填充位元組把那個假框架補完 —— 補完後 CRC
+    必然不符、框架被丟棄、解析器回到找 SYN 的狀態。填充用 0x00 而不是 0x55，否則
+    補完的瞬間又會被當成新的 SYN，再卡一次。
+
+    分批送並留間隔：目標端 RX FIFO 只有 128 byte，一次灌爆會被丟掉，而被丟掉的
+    位元組不會讓假框架前進。
+    """
+    import serial as _serial
+
+    sent = 0
+    ser = None
+    try:
+        ser = _serial.Serial(port=port, baudrate=baud, timeout=0.05,
+                             write_timeout=1.0)
+        for _ in range(attempts):
+            ser.write(TARGET_FLUSH_PAD)
+            ser.flush()
+            sent += len(TARGET_FLUSH_PAD)
+            time.sleep(TARGET_FLUSH_GAP_S)
+            ser.reset_input_buffer()      # 目標端可能吐出錯誤回應，一併清掉
+    except Exception:  # noqa: BLE001 - 沖洗失敗只代表這個埠不是它，不該中斷流程
+        pass
+    finally:
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return sent
+
+
 def probe_port(port, baud=V.DEFAULT_BAUD):
     """對單一埠做一次 LNet 握手。成功回裝置資訊字串，失敗回 None。
 
@@ -1560,18 +1621,45 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
     def work():
         ports = candidate_ports(include_bluetooth)
         events.put(("scan_begin", ports, None))
-        rates = [baud] + ([V.LEGACY_BAUD] if baud != V.LEGACY_BAUD else [])
-        for rate in rates:
-            legacy = rate != baud
+
+        def sweep(rate, note, flush=False):
             for port, desc in ports:
-                label = f"{desc}  @{rate}" + ("  (退回舊 baud)" if legacy else "")
+                label = f"{desc}  @{rate}{note}"
                 events.put(("scan_step", (port, label, "probing"), None))
+                if flush:
+                    flush_target(port, rate)
                 info = probe_port(port, rate)
-                events.put(("scan_step", (port, label, "found" if info else "no-reply"), None))
+                events.put(("scan_step",
+                            (port, label, "found" if info else "no-reply"), None))
                 if info:
                     # 找到就停：接著要用它連線，繼續掃只是讓人多等。
                     events.put(("scan_done", [(port, desc, info, rate)], None))
-                    return
+                    return True
+            return False
+
+        # 第 1 輪：主 baud，直接探測。
+        if sweep(baud, ""):
+            return
+
+        # 第 2 輪：主 baud + 先沖洗。**必須排在退回舊 baud 之前。**
+        #
+        # 目標端可能停在一個半截 LNet 框架上 (見 flush_target)，這時第 1 輪的握手會被
+        # 當成那個假框架的尾巴吃掉。先沖洗再試就能救回來 —— 而且此刻還沒有用錯的 baud
+        # 汙染過線路，成功率最高。
+        if sweep(baud, "  (先沖洗目標端)", flush=True):
+            return
+
+        # 第 3 輪：退回舊 baud。**這一輪本身會把跑新 baud 的目標弄壞** —— 對 230400 的
+        # 目標送 115200 的位元流，收到的是框架錯誤的垃圾，其中出現 0x55 幾乎必然，
+        # 於是解析器卡在假框架上。所以它排到最後，而且結束後一定要收拾 (第 4 輪)。
+        if baud != V.LEGACY_BAUD:
+            if sweep(V.LEGACY_BAUD, "  (退回舊 baud)"):
+                return
+            # 第 4 輪：收拾第 3 輪造成的汙染。沒有這一步，「掃描一次就再也連不上、
+            # 只能重置控制器電源」就會變成常態 —— 而元凶其實是掃描自己。
+            if sweep(baud, "  (清除舊 baud 造成的汙染)", flush=True):
+                return
+
         events.put(("scan_done", [], None))
 
     threading.Thread(target=work, daemon=True, name="port-scan").start()

@@ -20,7 +20,8 @@ from pathlib import Path
 
 import serial.tools.list_ports
 
-from x2c_link import candidate_ports, force_utf8_console, probe_port
+from x2c_link import (candidate_ports, flush_target, force_utf8_console,
+                      probe_port)
 from x2c_vars import (
     ALL_VARS,
     BATTERY_STATUS,
@@ -73,13 +74,25 @@ def scan_ports(baud, include_bluetooth=False):
     # 依序試多個 baud。韌體在 2026-08-25 由 115200 改成 230400，兩種板子都還在，
     # 而 baud 不符的症狀是「完全沒回應」—— 與沒接線、沒供電長得一模一樣。
     # 逐一試過再報告，使用者才分辨得出來。
-    rates = [baud] + [r for r in (DEFAULT_BAUD, LEGACY_BAUD) if r != baud]
-    print(f"掃描 {len(ports)} 個埠 x {len(rates)} 個 baud "
-          f"({', '.join(str(r) for r in rates)})，每次最多約 2 秒 …\n")
-    for rate in rates:
-        print(f"  --- @{rate} baud ---")
+    # 順序有講究，不是單純「每個 baud 都試一遍」:
+    #   1. 主 baud 直接探測
+    #   2. 主 baud + 先沖洗目標端 (它可能停在半截 LNet 框架上)
+    #   3. 其他 baud —— **這一輪會弄壞跑其他 baud 的目標**，所以排最後
+    #   4. 主 baud + 沖洗，收拾第 3 輪造成的汙染
+    # 少了第 2、4 輪，「掃描一次就再也連不上、只能重置控制器電源」會變成常態，
+    # 而元凶其實是掃描自己。詳見 x2c_link.flush_target()。
+    others = [r for r in (DEFAULT_BAUD, LEGACY_BAUD) if r != baud]
+    rounds = [(baud, "", False), (baud, " (先沖洗目標端)", True)]
+    rounds += [(r, "", False) for r in others]
+    if others:
+        rounds.append((baud, " (清除其他 baud 造成的汙染)", True))
+    print(f"掃描 {len(ports)} 個埠 x {len(rounds)} 輪，每次最多約 2 秒 …\n")
+    for rate, note, flush in rounds:
+        print(f"  --- @{rate} baud{note} ---")
         for device, desc in ports:
             print(f"  {device:8s} {desc:42s} ", end="", flush=True)
+            if flush:
+                flush_target(device, rate)
             info = probe_port(device, rate)
             if info:
                 print("有回應 ✓")
@@ -92,12 +105,12 @@ def scan_ports(baud, include_bluetooth=False):
                     print(f"       在那之前請用 --baud {rate} 執行本工具與 GUI。")
                 return device
             print("無回應")
-    print("\n[FAIL] 所有埠 x 所有 baud 都沒有回應 X2CScope 的 LNet 握手。")
-    print("       baud 已經排除，所以問題在別處。檢查:")
+    print("\n[FAIL] 所有埠 x 所有輪次都沒有回應 X2CScope 的 LNet 握手。")
+    print("       baud 已經排除，卡住的半截框架也沖洗過了，所以問題在別處。檢查:")
     print("       * 板子有供電、USB 線接好")
     print("       * codeSw.h 的 CODESW_X2C_SCOPE_ENABLE 仍為 1")
     print("       * X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1")
-    print("       * 目標端是否卡死 -> 重置控制器電源後再試")
+    print("       * 目標端主迴圈是否卡死 (X2CScope_Update 沒被呼叫) -> 重置控制器電源")
     return None
 
 
