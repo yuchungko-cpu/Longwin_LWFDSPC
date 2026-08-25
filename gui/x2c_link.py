@@ -89,6 +89,28 @@ SCOPE_MAX_RETRY = 2
 # 而短少的資料解交錯之後是整體錯位的垃圾 —— 寧可報失敗，不要畫一張會騙人的圖。
 SCOPE_MIN_COMPLETENESS = 0.98
 
+# 開埠失敗時的重試次數與間隔。專治「關掉程式馬上重開」：前一個行程的 daemon 執行緒
+# 可能還卡在 ReadFile 裡抓著埠。第一次嘗試不算等待，所以實際最多等 2 x 0.5 秒。
+OPEN_RETRY_ATTEMPTS = 3
+OPEN_RETRY_WAIT_S = 0.5
+
+
+def _is_port_busy(exc):
+    """判斷例外是不是「埠被占用」。
+
+    pyserial 在 Windows 上會把 ERROR_ACCESS_DENIED 包成 SerialException，訊息長得像
+    `could not open port 'COM12': PermissionError(13, '存取被拒。', None, 5)` ——
+    而且那段是**本地化**的，所以只能比對錯誤碼與英文關鍵字，不能比對中文訊息。
+    """
+    text = str(exc).lower()
+    return any(mark in text for mark in (
+        "permissionerror",      # Windows: repr(ctypes.WinError()) 的開頭
+        "permission denied",    # POSIX
+        "access is denied",
+        "errno 13",
+        "winerror 5",
+    ))
+
 
 class Link(threading.Thread):
     """獨佔 X2CScope session 的背景執行緒。"""
@@ -207,16 +229,42 @@ class Link(threading.Thread):
 
         # 步驟 3 — 開連線。這一步需要硬體。
         self.post("status", f"開啟 {self.port} @ {self.baud} …")
-        try:
-            from pyx2cscope.x2cscope import X2CScope
-            self._scope = X2CScope(port=self.port, baud_rate=self.baud,
-                                   elf_file=self.elf)
-        except Exception as exc:  # noqa: BLE001
-            self.post("error",
-                      f"無法開啟連線: {exc}\n"
-                      "檢查: 板子有供電、USB 線、COM port 正確，"
-                      "以及 codeSw.h 的 CODESW_X2C_SCOPE_ENABLE 仍為 1。"
-                      "注意 X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1。")
+        from pyx2cscope.x2cscope import X2CScope
+
+        # 埠被占用要重試，不能一次就放棄。前一個行程結束時，卡在 ReadFile 裡的
+        # daemon 執行緒要等滿 pyserial 的 timeout 才會死，這段時間埠還在它手上 ——
+        # 使用者關掉程式馬上重開就會撞上。等一下就好了，不該叫人去查 USB 線。
+        last_exc = None
+        for attempt in range(OPEN_RETRY_ATTEMPTS):
+            if self.stop_event.is_set():
+                return False
+            try:
+                self._scope = X2CScope(port=self.port, baud_rate=self.baud,
+                                       elf_file=self.elf)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if not _is_port_busy(exc) or attempt == OPEN_RETRY_ATTEMPTS - 1:
+                    break
+                self.post("status",
+                          f"{self.port} 被占用，等待釋放 … "
+                          f"({attempt + 1}/{OPEN_RETRY_ATTEMPTS - 1})")
+                self.stop_event.wait(OPEN_RETRY_WAIT_S)
+
+        if last_exc is not None:
+            if _is_port_busy(last_exc):
+                self.post("error",
+                          f"{self.port} 被其他程式占用: {last_exc}\n"
+                          "常見原因: 這支 GUI 的另一個視窗還開著、check_link.py "
+                          "還在跑、或是上一個行程尚未完全結束 (等幾秒再試)。"
+                          "也檢查有沒有終端機軟體 (PuTTY / 序列埠監控) 開著同一個埠。")
+            else:
+                self.post("error",
+                          f"無法開啟連線: {last_exc}\n"
+                          "檢查: 板子有供電、USB 線、COM port 正確，"
+                          "以及 codeSw.h 的 CODESW_X2C_SCOPE_ENABLE 仍為 1。"
+                          "注意 X2CScope 走 UART2 (RB8/RB9)，不是 RS485 的 UART1。")
             return False
 
         try:
@@ -946,6 +994,10 @@ class Link(threading.Thread):
         offset = 0
         drained_total = 0
         while offset < used:
+            # 使用者關程式時不要再把剩下的 16 個區塊讀完 —— 一個滿緩衝擷取要 1~2 秒，
+            # 而那段時間裡序列埠還被抓著，行程結束不了，下次啟動就開不了埠。
+            if self.stop_event.is_set():
+                raise RuntimeError("擷取中止：正在關閉連線")
             size = min(chunk, used - offset)
             for attempt in range(SCOPE_CHUNK_RETRY + 1):
                 try:

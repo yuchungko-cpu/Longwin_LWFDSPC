@@ -28,6 +28,10 @@ from x2c_link import (DemoLink, Link, force_utf8_console, list_serial_ports,
 UI_TICK_MS = 40          # Tk 抽取 event queue 的間隔
 TRACE_POINTS = 300       # 捲動圖保留的點數
 
+# 關閉程式時等 worker 放掉序列埠的上限。涵蓋最壞情況：一次 Scope 區塊讀取的
+# SCOPE_READ_TIMEOUT_S(3.0) 加上收尾。超過就照關 —— 讓視窗永遠關不掉更糟。
+SHUTDOWN_WAIT_S = 4.0
+
 # 淺色主題。文字與強調色都對白底挑過對比 (前景 ≥4.5:1、圖形 ≥3:1)，
 # 所以同一組顏色在 UI 邊框、表格文字與繪圖軌跡上都讀得清楚。
 C = {
@@ -1297,11 +1301,29 @@ class App(tk.Tk):
         if self._tick is not None:
             self.after_cancel(self._tick)
             self._tick = None
-        # 兩條都要停。_closing_link 是還在收尾的舊 link —— 漏掉它的話關窗後那個
-        # daemon 執行緒還抓著序列埠，直到行程真的結束為止。
+        # 兩條都要停。_closing_link 是還在收尾的舊 link。
         for link in (self.link, self._closing_link):
             if link is not None:
                 link.stop()
+        self._shutdown_deadline = time.monotonic() + SHUTDOWN_WAIT_S
+        self._finish_close()
+
+    def _finish_close(self):
+        """等 worker 放掉序列埠再真的關掉視窗。
+
+        為什麼不能直接 destroy(): worker 是 daemon 執行緒，而 CPython 在解譯器結束時
+        「殺掉」daemon 執行緒的方式是等它下一次要取得 GIL 時才讓它死。卡在 ReadFile
+        裡的執行緒 (GIL 已釋放) 會先等滿 pyserial 的 timeout 才輪到那一步 —— 這段時間
+        行程還沒真正結束，序列埠還在它手上。使用者這時重開程式就會開不了埠。
+
+        所以視窗要留著、狀態列要說明在等什麼，而不是看起來關掉了卻在背景抓著埠。
+        """
+        alive = [link for link in (self.link, self._closing_link)
+                 if link is not None and link.is_alive()]
+        if alive and time.monotonic() < self._shutdown_deadline:
+            self.status.set("關閉序列埠中 …")
+            self.after(60, self._finish_close)
+            return
         self.destroy()
 
 
