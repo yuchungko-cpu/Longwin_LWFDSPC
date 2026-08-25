@@ -21,7 +21,7 @@ from pathlib import Path
 # 韌體版本由 GUI 從目標端讀回來顯示 (Modbus reg[21])，不寫死在這裡。
 #
 # 出版時更新這個字串，並在 git 打對應 tag (ex: gui-v1.0)。
-GUI_VERSION = "V1.0"
+GUI_VERSION = "V1.0.1"
 
 # 專案根目錄 = 本 gui/ 資料夾的上一層。
 REPO_ROOT = Path(__file__).resolve().parent.parent

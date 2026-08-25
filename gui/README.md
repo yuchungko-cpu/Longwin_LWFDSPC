@@ -1,11 +1,14 @@
-# LWFDSPC 主機端工具 (X2CScope / UART2) — V1.0
+# LWFDSPC 主機端工具 (X2CScope / UART2) — V1.0.1
 
 給 Longwin LWFDSPC 滑板車控制器用的 PC 端診斷與調校介面，走韌體裡既有的
 X2CScope 連線，**不需要改韌體**。
 
-版本號與韌體版本各走各的：本工具是 **V1.0**（`x2c_vars.py` 的 `GUI_VERSION`，
-git tag `gui-v1.0`），韌體版本由 GUI 從目標端讀回來顯示，不寫死在主機端。
+版本號與韌體版本各走各的：本工具是 **V1.0.1**（`x2c_vars.py` 的 `GUI_VERSION`，
+git tag `gui-v1.0.1`），韌體版本由 GUI 從目標端讀回來顯示，不寫死在主機端。
 `python motor_gui.py --version` 或 `python check_link.py --version` 可以問出來。
+
+> `gui-v1.0` 功能完整但連線生命週期有四個缺陷，實車上表現為「斷線後就再也連不上，
+> 只能重置控制器電源」。**請用 V1.0.1 或更新的版本**；`gui-v1.0` 只當歷史紀錄保留。
 
 X2CScope 走專屬的 **UART2 (RB8 = U2TX / RB9 = U2RX)**，與 RS485/Modbus 儀表用的
 UART1 分開，所以接上主機不會干擾儀表通訊。
