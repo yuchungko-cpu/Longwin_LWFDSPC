@@ -410,6 +410,9 @@ class App(tk.Tk):
         self._closing_link = None
         # 最後一次鏈路錯誤，跨連線保留 —— 掉線原因不能被下一張橫幅蓋掉。
         self._last_link_error = ""
+        # 連線時發現的問題（ELF 不對版、build 過期、缺變數）。原本只在 on_connected
+        # 裡才建立，於是任何在首次連線**之前**想還原這張橫幅的路徑都會 AttributeError。
+        self._connect_banner = ""
         self._writes_permitted = False
         self._counter_base = {}       # 手動基準 (「計數器歸零」按鈕)
         self._connect_base = {}       # 自動基準，連線後第一輪掃描完成時記下
@@ -782,6 +785,19 @@ class App(tk.Tk):
         # 記下來當下次開程式的預設。選了就算採用 —— 不等連線成功才記，因為連不上
         # 的時候使用者最需要的就是「我上次選的還在」而不是被打回預設值。
         V.save_last_baud(baud)
+        # 選了非預設值就當場警告，不要等它掉線才說。實機驗證 230400 掉線後自動與
+        # 手動重連都救不回來（只能重置控制器電源），所以這不是「可能比較慢」等級的
+        # 取捨 —— 使用者有權在按下連線之前就知道。
+        if baud != V.DEFAULT_BAUD:
+            self.show_banner(
+                f"已選 {baud:,} baud。**實機驗證這個 baud 會在連線幾十秒後完全停止"
+                f"回應，而且自動與手動重連都救不回來，只能重置控制器電源。**\n"
+                f"穩定的是 {V.DEFAULT_BAUD:,}（本工具預設）。"
+                f"{baud:,} 的好處只有頻寬加倍（Scope 擷取較快）——"
+                "讀不到資料時那沒有意義。\n"
+                "板子燒的 X2C_BAUD_TARGET 必須與這裡一致，否則連不上。")
+        else:
+            self.show_banner(self._connect_banner)
         if self.link is not None:
             self.status.set(f"baud 改為 {baud:,} —— 要斷線再連線才生效")
         else:

@@ -74,6 +74,14 @@ REOPEN_MIN_INTERVAL = 8.0
 # 輪數在這個狀態下不是時間的代理量，所以階梯改用真實時間，輪數只當附註。
 NOREPLY_FLUSH_AT_S = (2.0, 6.0)     # 沖洗目標端 LNet 解析器 (~110ms/次)
 NOREPLY_REOPEN_AFTER_S = 12.0       # 升級到「關掉再重開序列埠」
+# 重開幾次都救不回來就停止重開。
+#
+# 【2026-08-26 實機修正】原本刻意「不會停」，理由是重開埠等於使用者手動重連、而
+# 手動重連有效 (見 8fc9d1d)。**那個前提在 230400 下是錯的** —— 實測 230400 掉線後
+# 自動與手動重連都救不回來，只能重置控制器電源。無限重開在那個情況下每 8 秒卡住
+# worker 一秒，而且永遠不會成功，等於裝作還在努力。
+# 停下來並誠實說明該做什麼，比無限重試有用。
+NOREPLY_REOPEN_MAX = 3
 NOREPLY_WEDGE_AFTER_S = 20.0        # 跳紅色橫幅
 NOREPLY_REPEAT_S = 15.0             # 橫幅重發間隔 (帶上更新後的秒數)
 
@@ -647,9 +655,13 @@ class Link(threading.Thread):
         #
         # 而且它就是使用者手動做的那件事：_reopen_port() 走 interface.stop()/start()，
         # 後者建一個新的 serial.Serial —— 與按「斷線」再按「連線」在目標端看到的完全
-        # 相同 (同樣關閉再開啟，DTR/RTS 同樣跳一次)。既然實機證據是手動重連有效，
-        # 就沒有理由要使用者去按那兩個鈕。
+        # 相同 (同樣關閉再開啟，DTR/RTS 同樣跳一次)。所以不需要使用者去按那兩個鈕。
+        #
+        # ⚠ 但**這一步救不回 230400 的掉線**：實測那個 baud 掉線後自動與手動重連都
+        # 無效，只能重置控制器電源。所以試 NOREPLY_REOPEN_MAX 次就停 —— 繼續每 8 秒
+        # 重開只是每次卡住 worker 一秒，並且裝作還在努力。
         if (dead_s >= NOREPLY_REOPEN_AFTER_S
+                and self._noreply_reopens < NOREPLY_REOPEN_MAX
                 and now - self._last_reopen >= REOPEN_MIN_INTERVAL):
             self._last_reopen = now
             self._noreply_reopens += 1
@@ -694,17 +706,33 @@ class Link(threading.Thread):
                          "或按「掃描」讓它自己找。\n" if others else "")
                       + "check_link.py --scan 也會逐一試 baud 並告訴你哪一個通。")
             return
-        self.post("error", head +
-                  f"曾經讀得到、後來停止回應。**已經自動試過**：沖洗目標端的 LNet "
-                  f"解析器 {self._noreply_flushes} 次、關閉並重開序列埠 "
-                  f"{self._noreply_reopens} 次（每 {REOPEN_MIN_INTERVAL:.0f} 秒最多"
-                  "一次，仍在持續重試，不需要你按任何鈕）。\n"
-                  "自動重開序列埠與你手動按「斷線」→「連線」在目標端看到的是同一件事"
-                  "（同樣關閉再開啟，DTR/RTS 同樣跳一次）。**如果手動重連救得回來、"
-                  "自動重開卻救不回來，請回報** —— 那代表兩者還有一個我們沒找到的差異，"
-                  "是很有價值的線索。\n"
-                  "都無效才需要重置控制器電源 (那代表目標端主迴圈本身停了，"
-                  "X2CScope_Update 沒有被呼叫，主機端做什麼都沒用)。\n"
+        exhausted = self._noreply_reopens >= NOREPLY_REOPEN_MAX
+        tried = (f"曾經讀得到、後來停止回應。**已經自動試過**：沖洗目標端的 LNet "
+                 f"解析器 {self._noreply_flushes} 次、關閉並重開序列埠 "
+                 f"{self._noreply_reopens} 次"
+                 + ("（已達上限，不再重試 —— 繼續重開只會每次卡住一秒而不會成功）。\n"
+                    if exhausted else
+                    f"（每 {REOPEN_MIN_INTERVAL:.0f} 秒最多一次，仍在重試）。\n"))
+        # 手動重連沒有比自動更強：_reopen_port() 與按「斷線」→「連線」在目標端看到的
+        # 是同一件事 (同樣關閉再開啟、DTR/RTS 同樣跳一次)。所以不要叫使用者去按 ——
+        # 那只是讓他多做一次已經失敗過的動作。
+        if self.baud != V.DEFAULT_BAUD:
+            # 實機結論：230400 掉線後自動與手動重連都救不回來，只能重置電源。
+            # 這是目前唯一有效的處置，所以排在最前面講。
+            advice = (f"**你目前用 {self.baud:,}。實機驗證這個 baud 掉線後救不回來** ——"
+                      "自動重開序列埠與手動按「斷線」→「連線」在目標端看到的是同一件事"
+                      "（同樣關閉再開啟、DTR/RTS 同樣跳一次），兩者都無效。\n"
+                      f"**處置：重置控制器電源，並把 baud 改成 {V.DEFAULT_BAUD:,}**"
+                      "（底部選單；韌體端要同步改 diagnostics_x2cscope.c 的 "
+                      f"X2C_BAUD_TARGET）。{V.DEFAULT_BAUD:,} 實機驗證穩定。\n")
+        else:
+            advice = ("自動重開序列埠與手動按「斷線」→「連線」在目標端看到的是同一件事"
+                      "（同樣關閉再開啟、DTR/RTS 同樣跳一次），所以手動再試一次不會更好。\n"
+                      f"你已經在實機驗證穩定的 {V.DEFAULT_BAUD:,} 上，卻仍然掉線 ——"
+                      "請重置控制器電源。這代表目標端主迴圈本身停了"
+                      "（X2CScope_Update 沒有被呼叫），主機端做什麼都沒用。\n"
+                      "**這種情況值得回報**：穩定 baud 上掉線是新的症狀。\n")
+        self.post("error", head + tried + advice +
                   "已知觸發條件: Scope 讀回在中途失敗 (pyx2cscope 會吞掉失敗的傳輸區塊"
                   "並繼續，目標端可能因此卡在「還要再送 N 個位元組」的狀態)。\n"
                   "降低發生機率: 取樣分頻調大、通道數減少、或先停用 Modbus 儀表。")
