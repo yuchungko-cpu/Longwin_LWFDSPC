@@ -14,6 +14,7 @@
 Component: HOST TOOLING
 """
 
+import json
 from pathlib import Path
 
 # 主機端工具自己的版本，與韌體版本 (s_modbus_decode.h 的 FW_VER_*) 各走各的 ——
@@ -21,7 +22,7 @@ from pathlib import Path
 # 韌體版本由 GUI 從目標端讀回來顯示 (Modbus reg[21])，不寫死在這裡。
 #
 # 出版時更新這個字串，並在 git 打對應 tag (ex: gui-v1.0)。
-GUI_VERSION = "V1.0.1"
+GUI_VERSION = "V1.0.4"
 
 # 專案根目錄 = 本 gui/ 資料夾的上一層。
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -72,19 +73,67 @@ DEFAULT_ELF = (newest_elf()
                    / "LWFDSPC.X.production.elf"))
 
 # X2CScope 走專屬的 UART2 (RB8=U2TX / RB9=U2RX)，與 RS485/Modbus 的 UART1 分開。
-# diagnostics_x2cscope.c 的 X2C_BAUDRATE_DIVIDER = 26：
-#   FCY 100MHz / 16 / (1+26) = 231,481 baud，對 230400 誤差 +0.47%，在容差內。
+# diagnostics_x2cscope.c 的 X2C_BAUDRATE_DIVIDER 由 X2C_BAUD_TARGET 推導：
+#   115200 -> divider 53：FCY 100MHz / 16 / (1+53) = 115,741 baud，誤差 +0.47%
+#   230400 -> divider 26：FCY 100MHz / 16 / (1+26) = 231,481 baud，誤差 +0.47%
+# 兩者誤差相同，所以時鐘容差不是選擇的依據。
 #
-# 【2026-08-25 由 115200 提升到 230400】UART2 頻寬是本工具的瓶頸：實測目標端的
+# 【2026-08-26 預設改回 115200】
+#
+# 曾經預設 230400，理由是頻寬：UART2 是本工具的瓶頸 —— 實測目標端的
 # g_u16X2cTxFifoMaxUsed 長期頂在 416，正好是 TX FIFO 的節流點 (512-96)，代表
-# X2CScope_Communicate() 每次都因 TX 快滿而中斷。baud 加倍讓線上時間減半。
+# X2CScope_Communicate() 每次都因 TX 快滿而中斷，baud 加倍讓線上時間減半。
+#
+# 但**實機驗證顯示 230400 會在連線幾十秒後完全停止回應，115200 穩定**。
+# 症狀是主機端連續讀不到任何值 (哨兵逾時)，而目標端沒有拋任何錯 ——
+# 原因還沒查出來 (TX ISR 與 UTXISEL 都排除過了)，所以先以穩定為預設。
+# 頻寬換穩定是對的取捨：讀不到資料時頻寬多少都沒有意義。
+#
+# 這仍然只是**選單與 --baud 的預設起點**，不是「正確答案」。真正決定的是板子燒的
+# X2C_BAUD_TARGET，而 GUI 有 baud 選單、沒指定時會用上次成功的值 (見 load_last_baud)。
 #
 # ⚠ 必須與韌體一致，否則連不上 (握手就失敗，不是資料錯)。
-DEFAULT_BAUD = 230400
+DEFAULT_BAUD = 115200
 
-# 燒舊韌體 (divider 53) 的板子仍然存在，所以埠掃描在主 baud 全數失敗後會自動退回
-# 這個值再掃一輪 —— 不然使用者只會看到「找不到裝置」，卻猜不到是 baud 不符。
-LEGACY_BAUD = 115200
+# 另一個支援的值。頻寬加倍，但見上面：實機上會中途停止回應，所以不是預設。
+# 需要 Scope 的擷取速度而手邊那塊板子撐得住時才選它。
+#
+# 刻意**不叫 LEGACY_BAUD** (2026-08-26 之前的名字)：230400 是比較新的那一個，
+# 而預設改回 115200 之後那個名字的意思整個反過來，留著只會誤導人。
+HIGH_BAUD = 230400
+
+# 本工具認得的所有 baud，依嘗試順序排列 (預設排第一)。兩個都是**正常可用**的設定，
+# 韌體的 X2C_BAUD_TARGET 兩個值都在支援範圍內。所以工具不對使用者推薦任何一個，
+# 只誠實顯示現在生效的是哪一個 —— 選擇由手邊那塊板子的實測結果決定。
+KNOWN_BAUDS = (DEFAULT_BAUD, HIGH_BAUD)
+
+# 上次成功連上的 baud。記下來的理由不只是省時間 ——
+#
+# 照 diagnostics_x2cscope.c 與 flush_target() 的說明，**用錯的 baud 去探測正是把
+# 目標端 LNet 解析器弄卡的主因**：錯 baud 的位元流是一串框架錯誤的垃圾，其中出現
+# 0x55 (SYN) 幾乎必然，於是目標端認了那個假 SYN 之後就停在「還要再收 N 個位元組」。
+# 所以「先試錯的那個 baud」不是只慢一點，它會主動製造我們正在對付的那個故障。
+# 記住上次成功的值並優先試，正常情況下就完全不會發生錯 baud 探測。
+LAST_BAUD_STORE = Path(__file__).resolve().parent / "last_baud.json"
+
+
+def load_last_baud():
+    """讀回上次成功的 baud；沒有紀錄或壞檔就回 None。"""
+    try:
+        value = int(json.loads(LAST_BAUD_STORE.read_text("utf-8"))["baud"])
+    except Exception:  # noqa: BLE001 - 純屬最佳化，壞了就當沒有紀錄
+        return None
+    return value if value in KNOWN_BAUDS else None
+
+
+def save_last_baud(baud):
+    """記下這次成功的 baud。寫檔失敗完全不影響功能，所以靜靜忽略。"""
+    try:
+        if int(baud) in KNOWN_BAUDS:
+            LAST_BAUD_STORE.write_text(
+                json.dumps({"baud": int(baud)}), "utf-8")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------

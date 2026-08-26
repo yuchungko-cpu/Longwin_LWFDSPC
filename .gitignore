@@ -37,6 +37,8 @@ __pycache__/
 *.py[cod]
 # 使用者在 Scope 視窗自加的通道清單，屬於個人偏好而非專案設定。
 gui/scope_custom_channels.json
+# 上次成功連上的 baud。取決於手邊那塊板子燒的 X2C_BAUD_TARGET，不是專案設定。
+gui/last_baud.json
 # pyx2cscope 自己開的 log，跑一次就生一個，內容是逐次通訊紀錄。
 pyx2cscope.x2cscope.log
 

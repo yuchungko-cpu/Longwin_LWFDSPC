@@ -64,14 +64,27 @@ RESYNC_ATTEMPTS = 3
 # 變成自我維持的故障：每個週期重開一次 -> 下一輪必定失敗 -> 再重開，永遠出不來。
 REOPEN_MIN_INTERVAL = 8.0
 
-# 連續多少輪「目標端完全不回應」才判定成目標端卡死。125ms 間隔下 24 輪約 3 秒。
-# 目標端卡死時主機端做什麼都沒用 (清緩衝區、重開埠都碰不到目標端的狀態機)，
-# 所以要停止無謂的重試，直接告訴使用者需要重置控制器電源。
-NOREPLY_WEDGE_LIMIT = 24
-# 連續沒回應到第幾輪時，試著沖洗目標端的 LNet 解析器 (見 _flush_target_inline)。
-# 挑 8 與 16 是為了在 24 輪的放棄門檻之前有兩次機會，而每次沖洗約 110ms ——
-# 太早介入會把偶發的單次讀取失敗當成卡死，太晚就來不及在放棄前試完兩次。
-NOREPLY_FLUSH_AT = (8, 16)
+# ---- 目標端沒有回應時的復原階梯，全部以「已中斷幾秒」為基準 ----------------
+#
+# ⚠ **不能用輪數當門檻。** 這裡踩過一次：原本寫 NOREPLY_WEDGE_LIMIT = 24 並註解成
+# 「125ms 間隔下約 3 秒」，那是錯的 —— 目標端不回話時每一次 get_value() 都要等滿
+# pyserial 的 1 秒逐位元組逾時，所以一輪是**約 1 秒**而不是 125ms。24 輪其實是約
+# 24 秒，而「每 80 輪重發橫幅」是約 80 秒而不是預期的 10 秒。實機截圖上看到的
+# 「遙測停止 41.2 s」旁邊還寫著「連續 24 輪」就是這個誤差。
+# 輪數在這個狀態下不是時間的代理量，所以階梯改用真實時間，輪數只當附註。
+NOREPLY_FLUSH_AT_S = (2.0, 6.0)     # 沖洗目標端 LNet 解析器 (~110ms/次)
+NOREPLY_REOPEN_AFTER_S = 12.0       # 升級到「關掉再重開序列埠」
+NOREPLY_WEDGE_AFTER_S = 20.0        # 跳紅色橫幅
+NOREPLY_REPEAT_S = 15.0             # 橫幅重發間隔 (帶上更新後的秒數)
+
+# noreply 路徑重開序列埠時，關閉狀態要維持多久。
+#
+# 比 _reopen_port() 內建的 0.15 秒長得多，因為這裡要盡量複製「使用者手動按斷線再
+# 按連線」的條件 —— 那條路徑要等 worker 執行緒跑完 finally 才關埠 (可能還卡在一次
+# 1 秒的讀取裡)，再由 _watch_closing 以 60ms 輪詢等它結束，所以實際的關閉窗口是
+# 幾百毫秒到一秒。手動重連在實機上有效而 session 內沖洗無效，關閉窗口的長度是
+# 兩者少數的實質差異之一 (另一個是 DTR/RTS 跳一次，重開埠同樣會發生)。
+NOREPLY_REOPEN_SETTLE_S = 0.6
 
 # 連續多少輪都無法讓框架重新對齊，才判定成「ELF 不對版 / 鏈路失效」並封鎖寫入。
 # 給幾輪緩衝的理由：偶發的失步靠清緩衝區就能修好，不該每次都跳紅色橫幅嚇人。
@@ -154,7 +167,15 @@ class Link(threading.Thread):
         self._scope = None
         self._handles = {}
         self._signature_ok = False
+        # 哨兵的三態 ("ok" / "desync" / "noreply")，跟著 signature 事件送給 GUI。
+        # 只送布林值是不夠的：GUI 拿 False 只能印「不符」，而那三個字在這支工具裡
+        # 的專有意思是「ELF 不對版、位址已位移」—— 目標端單純沒回話時印它是錯的
+        # 診斷，會把使用者推去重新建置 ELF，而問題根本不在那裡。
+        self._signature_state = "noreply"
         self._err_streak = 0
+        # 上一次 _read_one 是「讀取失敗」還是「這顆不在 build 裡」。兩者都回 None，
+        # 但結論完全相反 (鏈路壞了 vs 韌體沒有這顆變數)，呼叫端必須分得出來。
+        self._last_read_failed = False
         self._last_error = ""
         # 「從連線到現在有沒有成功讀過任何一顆變數」。用來分辨兩種完全不同的故障：
         # 從頭到尾讀不到 = baud/設定不符；曾經讀得到後來不行 = 目標端卡死。
@@ -165,7 +186,13 @@ class Link(threading.Thread):
         self._flush_broken = False
         self._last_reopen = 0.0
         self._noreply_cycles = 0
+        # 第一次讀不到的時刻。復原階梯全部以「已中斷幾秒」判斷，不用輪數 ——
+        # 見 NOREPLY_FLUSH_AT_S 上面的說明。
+        self._noreply_since = 0.0
+        self._noreply_flushes = 0
+        self._noreply_reopens = 0
         self._wedge_reported = False
+        self._wedge_reported_at = 0.0
         self._last_drained = 0
         # Scope 狀態機：None -> "sampling" -> "reading" -> None (或回 sampling)
         self._scope_mode = None
@@ -323,6 +350,10 @@ class Link(threading.Thread):
         signature = self._read_one(V.V_SIGNATURE)
         self._signature_ok = (signature is not None
                               and int(signature) == V.SIGNATURE_EXPECTED)
+        # 三態要在這裡一起定案：_set_signature 是靠「與現值不同」來決定要不要發事件，
+        # 所以連線時的初值必須是真的量到的那一態，否則第一次狀態改變會被吃掉。
+        self._signature_state = ("ok" if self._signature_ok
+                                 else "noreply" if signature is None else "desync")
 
         info = {name: self._read_one(name) for name in V.INFO_VARS}
 
@@ -330,6 +361,7 @@ class Link(threading.Thread):
             "port": self.port, "baud": self.baud, "elf": self.elf,
             "elf_mtime": elf_mtime, "stale": stale, "device": device,
             "signature": signature, "signature_ok": self._signature_ok,
+            "signature_state": self._signature_state,
             "absent": absent, "info": info,
             "writes_allowed": self.allow_writes and self._signature_ok,
         })
@@ -355,6 +387,7 @@ class Link(threading.Thread):
         _last_error 是空的 (實機橫幅上顯示「最後一次的錯誤: (無)」就是這個 bug)、
         而且**清收接緩衝區完全沒有執行**，失步永遠修不好。
         """
+        self._last_read_failed = False
         handle = self._handle(name)
         if handle is None:
             return None            # 這顆不在 build 裡 —— 不是讀取失敗，不計入
@@ -367,6 +400,7 @@ class Link(threading.Thread):
             value, error = None, "{}: {}".format(type(exc).__name__, exc)
         if error is not None:
             self._err_streak += 1
+            self._last_read_failed = True
             self._last_error = error
             # 讀取失敗代表這個框架已經被放棄，而它剩下的位元組還躺在收接緩衝區裡。
             # mchplnet 的 LNetSerial.read() 不驗 SYN、盲目相信長度位元組，所以那些
@@ -379,18 +413,24 @@ class Link(threading.Thread):
         self._ever_read_ok = True
         return value
 
-    def _read_many(self, names):
+    def _read_many(self, names, failures=None):
         """逐顆讀，但每顆之前先看一眼停止旗標。
 
         沒有這個檢查的話，「斷線」最壞情況要等幾十秒才生效：一個週期最多讀約 50 顆
         變數，目標端沒回應時每顆都會卡滿 pyserial 的 1 秒 timeout，而旗標本來只在
         週期之間檢查。使用者會看著「關閉序列埠中 …」一直等，然後合理地認為程式壞了。
+
+        傳入 ``failures`` (list) 就會把**讀取失敗**的變數名收集進去 —— 不含「這顆不在
+        build 裡」的那種 None。呼叫端要靠這個才講得出正確的原因：全是 None 時到底是
+        韌體沒有這些變數，還是鏈路根本沒回話。
         """
         values = {}
         for name in names:
             if self.stop_event.is_set():
                 break
             values[name] = self._read_one(name)
+            if failures is not None and self._last_read_failed:
+                failures.append(name)
         return values
 
     # -- 框架對齊 ----------------------------------------------------------
@@ -513,9 +553,7 @@ class Link(threading.Thread):
         self._last_reopen = now
         if not self._reopen_port():
             return False
-        # 重開之後給鏈路時間穩定再判斷。剛開好的埠前幾筆交易失敗是正常的，
-        # 立刻判定失敗只會讓我們再重開一次。
-        self.stop_event.wait(0.25)
+        # 穩定等待已經移進 _reopen_port() 了 (兩條呼叫路徑都需要它)。
         for _ in range(RESYNC_ATTEMPTS):
             self._flush_input()
             if self._sentinel_ok():
@@ -523,18 +561,26 @@ class Link(threading.Thread):
             self.stop_event.wait(0.1)
         return False
 
-    def _reopen_port(self):
-        """關掉再重開序列埠，強制得到一條乾淨的串流。"""
+    def _reopen_port(self, settle_s=0.15):
+        """關掉再重開序列埠，強制得到一條乾淨的串流。
+
+        ``settle_s`` 是**埠處於關閉狀態**的時間。失步路徑用預設的 0.15 秒就夠 (它要
+        丟的只是主機這一側的在途位元組)；noreply 路徑刻意給得長很多，見
+        NOREPLY_REOPEN_SETTLE_S —— 那裡要盡量複製手動重連的條件。
+
+        interface.start() 會建一個新的 serial.Serial，所以 DTR/RTS 會跳一次 ——
+        與使用者手動按「斷線」再按「連線」在目標端看到的是同一件事。
+        """
         try:
             interface = self._scope.interface
             interface.stop()
-            self.stop_event.wait(0.15)      # 讓 Windows 真的放掉這個埠
+            self.stop_event.wait(settle_s)  # 讓 Windows 真的放掉這個埠
             interface.start()
-            self.stop_event.wait(0.05)
+            self.stop_event.wait(0.25)      # 剛開好的埠前幾筆交易失敗是正常的
         except Exception as exc:  # noqa: BLE001
             self.post("status", f"重開序列埠失敗: {exc}")
             return False
-        self.post("status", "序列埠已重開，正在確認框架對齊 …")
+        self.post("status", "序列埠已重開，正在確認能不能讀到值 …")
         return True
 
     def _handle_bad_sentinel(self, state):
@@ -546,7 +592,10 @@ class Link(threading.Thread):
         """
         if state == "desync":
             self._invalid_cycles += 1
-            self._noreply_cycles = 0
+            # 讀到值 (即使是錯位的) 代表目標端在說話，noreply 的階梯要整組歸零 ——
+            # 只清輪數會讓 _noreply_since / _noreply_flushes 留著，下一次真的沒回應
+            # 時階梯就從中間開始跑。
+            self._noreply_reset()
             # 先用最便宜的手段：清一次緩衝區再驗一次 (~4ms)。
             #
             # 實機踩過：一偵測到失步就走完整條復原階梯 (3 次 flush+50ms 等待、
@@ -571,62 +620,129 @@ class Link(threading.Thread):
 
         # state == "noreply"
         self._noreply_cycles += 1
-        # 在放棄之前先沖洗目標端的 LNet 解析器。
+        now = time.monotonic()
+        if not self._noreply_since:
+            self._noreply_since = now
+        dead_s = now - self._noreply_since
+
+        # 階梯 1 — 沖洗目標端的 LNet 解析器 (~110ms)。
         #
-        # 原本這條路徑直接叫使用者重置控制器電源，理由是「主機端碰不到目標端的狀態機」
-        # —— 那句話是錯的。目標端可能只是卡在一個半截框架上等後續位元組，而那只需要
-        # 我們往同一個埠寫填充位元組就能補完 (見 flush_target)。
-        # 實機證據: 使用者按「連線」就能恢復，而重新連線做的正是這件事。
-        # 既然不必重開埠也不必重新握手，就沒有理由讓使用者去重置電源。
-        if self._noreply_cycles in NOREPLY_FLUSH_AT:
-            self.post("status",
-                      f"目標端沒有回應（{self._noreply_cycles} 輪）"
-                      f"—— 沖洗其 LNet 解析器後重試")
+        # 目標端可能只是卡在一個半截框架上等後續位元組，而那只需要往同一個埠寫填充
+        # 位元組就能補完 (見 _flush_target_inline)。便宜，所以先試。
+        if (self._noreply_flushes < len(NOREPLY_FLUSH_AT_S)
+                and dead_s >= NOREPLY_FLUSH_AT_S[self._noreply_flushes]):
+            self._noreply_flushes += 1
+            self.post("status", f"目標端沒有回應（{dead_s:.0f} 秒）"
+                                "—— 沖洗其 LNet 解析器後重試")
             self._flush_target_inline()
             if self._sentinel_ok():
-                self._noreply_cycles = 0
-                self._set_signature(V.SIGNATURE_EXPECTED, True)
-                self.post("status", "目標端已恢復回應（沖洗解析器後）")
+                self._noreply_recovered("沖洗解析器後")
             return
-        if self._noreply_cycles < NOREPLY_WEDGE_LIMIT or self._wedge_reported:
+
+        # 階梯 2 — 關掉再重開序列埠，並持續重試。
+        #
+        # 這一步原本被刻意排除，理由是「對 noreply 套重開埠只會製造自我維持的故障」。
+        # 那個顧慮針對的是**每個週期都重開**，而 REOPEN_MIN_INTERVAL(8 秒) 已經擋住了；
+        # 沖洗都失敗過兩次之後不升級，等於把唯一還沒試的手段留在手上不用。
+        #
+        # 而且它就是使用者手動做的那件事：_reopen_port() 走 interface.stop()/start()，
+        # 後者建一個新的 serial.Serial —— 與按「斷線」再按「連線」在目標端看到的完全
+        # 相同 (同樣關閉再開啟，DTR/RTS 同樣跳一次)。既然實機證據是手動重連有效，
+        # 就沒有理由要使用者去按那兩個鈕。
+        if (dead_s >= NOREPLY_REOPEN_AFTER_S
+                and now - self._last_reopen >= REOPEN_MIN_INTERVAL):
+            self._last_reopen = now
+            self._noreply_reopens += 1
+            self.post("status", f"目標端沒有回應（{dead_s:.0f} 秒）—— 重開序列埠後重試")
+            if self._reopen_port(settle_s=NOREPLY_REOPEN_SETTLE_S):
+                # 剛開好的埠前幾筆交易失敗是正常的，所以驗多次才判定失敗。
+                # 每次之前看一眼停止旗標：一次驗證要等滿 1 秒逾時，不看的話按下
+                # 「斷線」最壞要等 3 秒多才生效。
+                for _ in range(RESYNC_ATTEMPTS):
+                    if self.stop_event.is_set():
+                        return
+                    if self._sentinel_ok():
+                        self._noreply_recovered(f"重開序列埠後，第 "
+                                                f"{self._noreply_reopens} 次")
+                        return
+                    self.stop_event.wait(0.1)
             return
-        # 目標端連續幾秒完全不回話。主機端已經沒有牌可以打了 —— 清緩衝區與重開埠
-        # 都只動到主機這一側，碰不到目標端 X2CScope 的狀態機。誠實講出來，
-        # 而不是無限重試裝作還在努力。
+
+        # 階梯 3 — 報告。重試不會停，所以橫幅講的是「已經試過什麼、還在試」。
+        if dead_s < NOREPLY_WEDGE_AFTER_S:
+            return
+        if self._wedge_reported and now - self._wedge_reported_at < NOREPLY_REPEAT_S:
+            return
         self._wedge_reported = True
-        self._set_signature(None, False)
-        head = (f"目標端沒有回應 X2CScope（連續 {self._noreply_cycles} 輪讀不到任何值）。\n"
+        self._wedge_reported_at = now
+        # state="noreply"：不是「不符」。位址沒有位移，是對方沒講話 —— 這兩件事
+        # 的處置完全不同 (前者要換 ELF，後者要重連或重置目標端)。
+        self._set_signature(None, False, state="noreply")
+        head = (f"目標端沒有回應 X2CScope（已中斷 {dead_s:.0f} 秒，"
+                f"{self._noreply_cycles} 輪讀不到任何值）。\n"
                 f"最後一次的錯誤: {self._last_error or '(無)'}\n")
         if not self._ever_read_ok:
             # 從連線到現在一顆都沒讀成功 -> 幾乎確定是設定不符，不是目標端卡死。
             # 這裡叫人重置電源只會浪費時間。
+            others = "、".join(f"{b:,}" for b in V.KNOWN_BAUDS if b != self.baud)
             self.post("error", head +
                       "**從連線到現在沒有成功讀取過任何一顆變數**，所以這不是目標端卡死，"
                       f"而是設定不符 —— 最可能是 baud rate。\n"
-                      f"主機目前用 {self.baud}；韌體的值在 diagnostics_x2cscope.c 的 "
+                      f"主機目前用 {self.baud:,}；韌體的值在 diagnostics_x2cscope.c 的 "
                       f"X2C_BAUD_TARGET。\n"
-                      f"韌體在 2026-08-25 由 115200 改成 {V.DEFAULT_BAUD}，"
-                      "若板子還沒重新燒錄就會是這個症狀。\n"
-                      "請先跑 check_link.py --scan：它會逐一試 baud 並告訴你哪一個通。")
+                      + (f"在底部的 baud 選單改成 {others} 再連線試一次，"
+                         "或按「掃描」讓它自己找。\n" if others else "")
+                      + "check_link.py --scan 也會逐一試 baud 並告訴你哪一個通。")
             return
         self.post("error", head +
-                  f"曾經讀得到、後來停止回應。已在第 "
-                  f"{'、'.join(str(n) for n in NOREPLY_FLUSH_AT)} 輪沖洗過目標端的 "
-                  "LNet 解析器，仍然沒有回應。\n"
-                  "**先按「斷線」再按「連線」試一次** —— 重新連線會重開序列埠並重新握手，"
-                  "這是比沖洗更強的手段，實機上通常一次就恢復。\n"
-                  "重連也無效才需要重置控制器電源 (那代表目標端主迴圈本身停了，"
+                  f"曾經讀得到、後來停止回應。**已經自動試過**：沖洗目標端的 LNet "
+                  f"解析器 {self._noreply_flushes} 次、關閉並重開序列埠 "
+                  f"{self._noreply_reopens} 次（每 {REOPEN_MIN_INTERVAL:.0f} 秒最多"
+                  "一次，仍在持續重試，不需要你按任何鈕）。\n"
+                  "自動重開序列埠與你手動按「斷線」→「連線」在目標端看到的是同一件事"
+                  "（同樣關閉再開啟，DTR/RTS 同樣跳一次）。**如果手動重連救得回來、"
+                  "自動重開卻救不回來，請回報** —— 那代表兩者還有一個我們沒找到的差異，"
+                  "是很有價值的線索。\n"
+                  "都無效才需要重置控制器電源 (那代表目標端主迴圈本身停了，"
                   "X2CScope_Update 沒有被呼叫，主機端做什麼都沒用)。\n"
                   "已知觸發條件: Scope 讀回在中途失敗 (pyx2cscope 會吞掉失敗的傳輸區塊"
                   "並繼續，目標端可能因此卡在「還要再送 N 個位元組」的狀態)。\n"
                   "降低發生機率: 取樣分頻調大、通道數減少、或先停用 Modbus 儀表。")
 
-    def _set_signature(self, value, ok):
-        """哨兵狀態變了才通知 GUI，避免每個週期都發同一個事件。"""
-        if ok == self._signature_ok:
+    def _noreply_reset(self):
+        """清掉 noreply 的整組帳目。目標端只要開口說話 (即使說的是錯的) 就該清。
+
+        每一項都要清：漏掉 _noreply_since 會讓下一次中斷從一個很久以前的時刻起算，
+        於是階梯的每一階都在第一輪就全部觸發；漏掉 _noreply_flushes 則會讓下一次
+        中斷完全跳過沖洗，直接跳到重開埠。
+        """
+        self._noreply_cycles = 0
+        self._noreply_since = 0.0
+        self._noreply_flushes = 0
+        self._noreply_reopens = 0
+        self._wedge_reported = False
+        self._wedge_reported_at = 0.0
+
+    def _noreply_recovered(self, how):
+        """目標端回話**而且值是對的**。清帳目、解除封鎖、通知 GUI。"""
+        self._noreply_reset()
+        self._set_signature(V.SIGNATURE_EXPECTED, True)
+        self.post("status", f"目標端已恢復回應（{how}）")
+
+    def _set_signature(self, value, ok, state=None):
+        """哨兵狀態變了才通知 GUI，避免每個週期都發同一個事件。
+
+        比較的是**三態**而不是布林值：desync -> noreply 兩邊的 ok 都是 False，只看
+        布林值的話這個轉換會被吃掉，GUI 會一直停在「框架失步、正在自動重新對齊」
+        —— 而 noreply 路徑刻意不做重新對齊，那句話是假的。
+        """
+        if state is None:
+            state = "ok" if ok else "desync"
+        if state == self._signature_state:
             return
+        self._signature_state = state
         self._signature_ok = ok
-        self.post("signature", {"signature": value, "ok": ok,
+        self.post("signature", {"signature": value, "ok": ok, "state": state,
                                 "at_connect": False})
 
     # -- 輪詢主迴圈 --------------------------------------------------------
@@ -685,10 +801,11 @@ class Link(threading.Thread):
                 self.stop_event.wait(max(0.0, self.interval
                                          - (time.monotonic() - started)))
                 continue
-            self._noreply_cycles = 0
-            if self._wedge_reported:
-                self._wedge_reported = False
-                self.post("status", "目標端恢復回應")
+            if self._noreply_since or self._wedge_reported:
+                # 走一般路徑自己好起來的 (沒有靠沖洗或重開埠)。整組帳目要一起清 ——
+                # 只清 _noreply_cycles 會讓 _noreply_since 留著一個很久以前的時刻，
+                # 下一次中斷的第一輪就會把階梯每一階全部觸發。
+                self._noreply_recovered("自行恢復")
 
             values = self._read_many(V.FAST_VARS)
             if cycle % V.SLOW_DIVIDER == 0:
@@ -774,7 +891,11 @@ class Link(threading.Thread):
             # 使用者明確按下按鈕才發生的一次性動作，不是背景輪詢。
             # 刻意不把可寫參數放進週期輪詢 —— 它們絕大多數只在開機初始化時被寫，
             # 一直重讀只是白花頻寬，捲動圖的時間解析度才是頻寬該花的地方。
-            self.post("write_values", self._read_many(V.WRITE_VARS))
+            # 附上讀取失敗的名單。少了它，GUI 對一整排 None 只能猜，而它猜的是
+            # 「這些變數不在 build 裡」—— 鏈路掛掉時那句話是完全錯的診斷。
+            failures = []
+            values = self._read_many(V.WRITE_VARS, failures)
+            self.post("write_values", (values, failures))
         elif kind == "interval":
             self.set_interval(payload)
 
@@ -791,8 +912,12 @@ class Link(threading.Thread):
         if not self._signature_ok:
             # 位址哨兵不符時全域變數位址已經位移，寫入會落在錯誤的位址上。
             # 在實車上那不只是顯示錯，是真的會動到別的東西。
+            # 但目標端只是沒回話 (noreply) 時位址是好的 —— 講成 ELF 不對版會把人
+            # 推去重新建置一個本來就對的檔案。兩種原因要分開講。
             self.post("write_done", (name, value, None, False,
-                                     "位址哨兵不符，寫入已封鎖 (ELF 不對版)"))
+                                     "目標端沒有回應，寫入已封鎖"
+                                     if self._signature_state == "noreply"
+                                     else "位址哨兵不符，寫入已封鎖 (ELF 不對版)"))
             return
         handle = self._handle(name)
         if handle is None:
@@ -1240,6 +1365,8 @@ class DemoLink(threading.Thread):
             "device": "模擬模式 — 沒有連上任何硬體",
             "signature": signature,
             "signature_ok": not self.bad_signature,
+            # --bad-signature 模擬的是「ELF 不對版」，所以是 desync 不是 noreply。
+            "signature_state": "desync" if self.bad_signature else "ok",
             "absent": [], "info": self._scenario(0.0),
             "writes_allowed": self.allow_writes and not self.bad_signature,
         })
@@ -1324,7 +1451,9 @@ class DemoLink(threading.Thread):
                         values[name] = self.WRITE_DEFAULTS.get(name)
                 values.update({k: v for k, v in self._written.items()
                                if k in V.WRITE_VARS})
-                self.post("write_values", values)
+                # 模擬鏈路不會讀取失敗，所以失敗名單永遠是空的 —— 但格式要與 Link
+                # 一致，否則 GUI 得為兩種 payload 各寫一條路。
+                self.post("write_values", (values, []))
             elif kind == "interval":
                 self.set_interval(payload)
 
@@ -1694,9 +1823,13 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
     一顆一顆回報而不是掃完才說話，是因為最壞情況要等十幾秒 —— 沒有進度的話
     使用者只會看到畫面卡住，然後以為工具壞了。
 
-    主 baud 全數失敗時會自動用 LEGACY_BAUD (115200) 再掃一輪。韌體在 2026-08-25 從
-    115200 改成 230400，但燒舊韌體的板子還在 —— 少了這層退回，使用者只會看到
-    「找不到裝置」，完全猜不到是 baud 不符。
+    ``baud`` 全數失敗時會用 V.KNOWN_BAUDS 裡其他的值再掃 —— 少了這層，使用者只會
+    看到「找不到裝置」，完全猜不到是 baud 不符。兩個 baud 都是韌體支援的正常設定
+    (板子燒哪個由 X2C_BAUD_TARGET 決定)，所以這不是「退回舊值」而是「試另一個」。
+
+    ⚠ 用錯的 baud 探測**會把跑另一個 baud 的目標弄卡** (見 flush_target)，所以
+    其他 baud 排在最後，而且結束後一定要再沖洗一次收拾汙染。GUI 的 baud 選單選對
+    就完全不會走到那一輪。
     """
     def work():
         ports = candidate_ports(include_bluetooth)
@@ -1731,7 +1864,7 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
         if sweep(baud, ""):
             return
 
-        # 第 2 輪：主 baud + 先沖洗。**必須排在退回舊 baud 之前。**
+        # 第 2 輪：選定的 baud + 先沖洗。**必須排在「試其他 baud」之前。**
         #
         # 目標端可能停在一個半截 LNet 框架上 (見 flush_target)，這時第 1 輪的握手會被
         # 當成那個假框架的尾巴吃掉。先沖洗再試就能救回來 —— 而且此刻還沒有用錯的 baud
@@ -1739,15 +1872,20 @@ def scan_ports_async(events, baud=V.DEFAULT_BAUD, include_bluetooth=False):
         if sweep(baud, "  (先沖洗目標端)", flush=True):
             return
 
-        # 第 3 輪：退回舊 baud。**這一輪本身會把跑新 baud 的目標弄壞** —— 對 230400 的
-        # 目標送 115200 的位元流，收到的是框架錯誤的垃圾，其中出現 0x55 幾乎必然，
-        # 於是解析器卡在假框架上。所以它排到最後，而且結束後一定要收拾 (第 4 輪)。
-        if baud != V.LEGACY_BAUD:
-            if sweep(V.LEGACY_BAUD, "  (退回舊 baud)"):
+        # 第 3 輪：試其他 baud。**這一輪本身會把跑另一個 baud 的目標弄壞** —— 對
+        # 230400 的目標送 115200 的位元流，收到的是框架錯誤的垃圾，其中出現 0x55
+        # 幾乎必然，於是解析器卡在假框架上。所以它排到最後，而且結束後一定要收拾。
+        #
+        # 用「其他所有已知 baud」而不是寫死某一個常數：KNOWN_BAUDS 之後若增加值，
+        # 寫死的版本會靜靜漏掉它們 —— 而症狀是「掃描找不到裝置」，完全看不出漏在哪。
+        others = [b for b in V.KNOWN_BAUDS if b != baud]
+        for other in others:
+            if sweep(other, f"  (改試 {other:,})"):
                 return
+        if others:
             # 第 4 輪：收拾第 3 輪造成的汙染。沒有這一步，「掃描一次就再也連不上、
             # 只能重置控制器電源」就會變成常態 —— 而元凶其實是掃描自己。
-            if sweep(baud, "  (清除舊 baud 造成的汙染)", flush=True):
+            if sweep(baud, "  (清除其他 baud 造成的汙染)", flush=True):
                 return
 
         # 被占用的埠要跟著結果一起回報 —— 它是「沒試到」，不是「試過沒有」。

@@ -26,7 +26,7 @@ from x2c_vars import (
     ALL_VARS,
     BATTERY_STATUS,
     DEFAULT_BAUD,
-    LEGACY_BAUD,
+    KNOWN_BAUDS,
     DEFAULT_ELF,
     DEFAULT_SCALE,
     EMB_LOCK_REASON,
@@ -40,6 +40,8 @@ from x2c_vars import (
     V_SIGNATURE,
     decode,
     decode_alarms,
+    load_last_baud,
+    save_last_baud,
     newest_source_mtime,
     q15_to_amp,
 )
@@ -71,9 +73,9 @@ def scan_ports(baud, include_bluetooth=False):
     if not ports:
         print("沒有候選序列埠 (藍牙虛擬埠預設排除，用 --include-bluetooth 納入)。")
         return None
-    # 依序試多個 baud。韌體在 2026-08-25 由 115200 改成 230400，兩種板子都還在，
-    # 而 baud 不符的症狀是「完全沒回應」—— 與沒接線、沒供電長得一模一樣。
-    # 逐一試過再報告，使用者才分辨得出來。
+    # 依序試 KNOWN_BAUDS 的每一個值。兩個 baud 都是韌體支援的正常設定 (板子燒哪個
+    # 由 X2C_BAUD_TARGET 決定)，而 baud 不符的症狀是「完全沒回應」—— 與沒接線、
+    # 沒供電長得一模一樣。逐一試過再報告，使用者才分辨得出來。
     # 順序有講究，不是單純「每個 baud 都試一遍」:
     #   1. 主 baud 直接探測
     #   2. 主 baud + 先沖洗目標端 (它可能停在半截 LNet 框架上)
@@ -81,7 +83,7 @@ def scan_ports(baud, include_bluetooth=False):
     #   4. 主 baud + 沖洗，收拾第 3 輪造成的汙染
     # 少了第 2、4 輪，「掃描一次就再也連不上、只能重置控制器電源」會變成常態，
     # 而元凶其實是掃描自己。詳見 x2c_link.flush_target()。
-    others = [r for r in (DEFAULT_BAUD, LEGACY_BAUD) if r != baud]
+    others = [r for r in KNOWN_BAUDS if r != baud]
     rounds = [(baud, "", False), (baud, " (先沖洗目標端)", True)]
     rounds += [(r, "", False) for r in others]
     if others:
@@ -105,11 +107,20 @@ def scan_ports(baud, include_bluetooth=False):
                 print("有回應 ✓")
                 print(f"\n[ OK ] 找到 X2CScope 裝置: {device} @ {rate} baud")
                 print(f"       裝置資訊: {info}")
-                if rate != DEFAULT_BAUD:
-                    print(f"\n[WARN] 這是舊的 baud。韌體已改用 {DEFAULT_BAUD} "
-                          f"(diagnostics_x2cscope.c 的 X2C_BAUD_TARGET)，")
-                    print("       重新建置並燒錄可以得到兩倍頻寬。")
-                    print(f"       在那之前請用 --baud {rate} 執行本工具與 GUI。")
+                # 記下來，GUI 與下一次 check_link 就會優先用這個值 ——
+                # 這支工具的用法本來就是「先跑它再開 GUI」，順手把結果傳過去。
+                save_last_baud(rate)
+                if rate != baud:
+                    # 只陳述事實，不建議改成另一個值。KNOWN_BAUDS 裡的每個值都是
+                    # 韌體支援的正常設定，而實測 230400 在某些板子上會中途停止回應、
+                    # 115200 穩定 —— 叫人「升級」等於推薦他回到會掉線的設定。
+                    print(f"\n[INFO] 這塊板子燒的是 {rate} (不是你指定的 {baud})。")
+                    print(f"       韌體端的值在 diagnostics_x2cscope.c 的 "
+                          f"X2C_BAUD_TARGET。")
+                    print(f"       之後用 --baud {rate} 執行本工具，"
+                          "GUI 則在下方 baud 選單選這個值 —— ")
+                    print("       用錯的 baud 探測會把目標端的 LNet 解析器弄卡，"
+                          "選對就完全不會發生。")
                 return device
             print("無回應")
     if busy:
@@ -138,7 +149,10 @@ def main():
     ap.add_argument("--version", action="version",
                     version=f"LWFDSPC 主機端工具 {GUI_VERSION}")
     ap.add_argument("--port", default="AUTO", help='COM port，或 "AUTO" (預設)')
-    ap.add_argument("--baud", type=int, default=DEFAULT_BAUD)
+    # 與 GUI 一致：沒指定就用上次成功的值，那比一律套 DEFAULT_BAUD 好 ——
+    # 用錯的 baud 探測會把目標端的解析器弄卡 (見 x2c_link.flush_target)。
+    ap.add_argument("--baud", type=int, default=None, choices=KNOWN_BAUDS,
+                    help=f"UART2 baud（預設：上次成功的值，或 {DEFAULT_BAUD}）")
     ap.add_argument("--elf", default=str(DEFAULT_ELF))
     ap.add_argument("--list", action="store_true", help="列出序列埠後結束")
     ap.add_argument("--scan", action="store_true",
@@ -147,6 +161,8 @@ def main():
                     help="掃描時也試藍牙虛擬 COM 埠 (預設跳過)")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
+    if args.baud is None:
+        args.baud = load_last_baud() or DEFAULT_BAUD
 
     if args.list:
         list_ports(args.include_bluetooth)
@@ -241,12 +257,31 @@ def main():
 
     # 步驟 3 — 位址正確性哨兵。這是所有其他數字可信與否的前提，所以先驗它。
     print("\n--- 位址哨兵 (ELF 與韌體是否對版) ---")
+    # 「讀不回來」與「讀到的值不對」是兩件事，結論相反：前者位址好得很，是對方沒
+    # 講話 (baud 不符 / 解析器卡住)；後者位址真的位移了，要換 ELF。混成一句
+    # 「哨兵不符 => 請用對版的 ELF 重跑」會讓人白花時間在一個本來就對的檔案上。
     signature_ok = False
+    signature_read = False
+    signature = None
     try:
+        # get_value() 失敗時 pyx2cscope 是**吞掉例外回傳 None**，不是拋例外 ——
+        # 所以「讀不到」必須靠 None 判斷，只包 try/except 會漏掉。
         signature = scope.get_variable(V_SIGNATURE).get_value()
-        print(f"  {V_SIGNATURE} = 0x{int(signature):04X} "
+    except Exception as exc:  # noqa: BLE001
+        print("  (哨兵讀取拋出例外:", exc, ")")
+    if signature is None:
+        print(f"  {V_SIGNATURE} = 讀不回來 (期望 0x{SIGNATURE_EXPECTED:04X})")
+        print("  [FAIL] 目標端沒有回應這一顆 => 這**不是** ELF 版本問題，位址沒有位移。")
+        print("         最可能是 baud 不符，或目標端的 LNet 解析器卡在半截框架上。")
+        print("         跑 --scan：它會逐一試 baud，並沖洗目標端卡住的解析器。")
+    else:
+        signature_read = True
+        print(f"  {V_SIGNATURE} = 0x{_fmt(signature, '04X')} "
               f"(期望 0x{SIGNATURE_EXPECTED:04X})")
-        signature_ok = int(signature) == SIGNATURE_EXPECTED
+        try:
+            signature_ok = int(signature) == SIGNATURE_EXPECTED
+        except (TypeError, ValueError):
+            signature_ok = False
         if signature_ok:
             print("  [ OK ] ELF 與韌體對版，以下數值可信。")
         else:
@@ -254,8 +289,6 @@ def main():
             print("         全域變數位址已位移，以下讀到的每一個數字都是錯位的"
                   "別的變數，數值全部作廢。")
             print("         請改用這次燒錄所對應的 ELF。")
-    except Exception as exc:  # noqa: BLE001
-        print("  (哨兵讀取失敗:", exc, ")")
 
     # 步驟 4 — 把每個變數讀一次。
     print("\n--- 即時數值 ---")
@@ -367,6 +400,10 @@ def main():
     scope.disconnect()
 
     print()
+    if not signature_read:
+        print("[FAIL] 位址哨兵讀不回來 —— 目標端沒有回應，上面的數值全是 '--'。")
+        print("       這不是 ELF 版本問題。先跑 --scan 確認 baud 與埠。")
+        return 2
     if not signature_ok:
         print("[FAIL] 位址哨兵不符，上面所有數值都不可信。請用對版的 ELF 重跑。")
         return 2

@@ -6,9 +6,14 @@
 用法:
     python motor_gui.py --demo                # 無硬體，驗版面
     python motor_gui.py --port COM12          # 接上車
+    python motor_gui.py --port COM12 --baud 115200
     python motor_gui.py --port AUTO --read-only
 
-先跑 check_link.py 再開這支：它把通訊問題與 GUI 問題隔開來。
+baud 由使用者決定：底部有選單，`--baud` 可覆寫，沒指定就用上次成功的值。
+不知道板子燒的是哪個就按「掃描」，它會把 KNOWN_BAUDS 都試過。
+
+先跑 check_link.py 再開這支：它把通訊問題與 GUI 問題隔開來，而且它掃到的 baud
+會被記下來成為這支的預設值。
 
 Component: HOST TOOLING
 """
@@ -27,6 +32,17 @@ from x2c_link import (DemoLink, Link, force_utf8_console, list_serial_ports,
 
 UI_TICK_MS = 40          # Tk 抽取 event queue 的間隔
 TRACE_POINTS = 300       # 捲動圖保留的點數
+
+# 多久沒收到 data 事件就判定「遙測已停止」。取 max(這個值, 4 × 輪詢間隔)。
+#
+# 為什麼需要這個看門狗：哨兵閘門判定資料不可信時，worker 那一輪**完全不發 data**
+# (見 x2c_link 的 _poll_loop)。於是輪詢率、捲動圖與圖例上的即時值全部停在最後一筆
+# 好資料上 —— 而畫面看起來跟「一切正常」一模一樣。在診斷工具上這比畫面空白糟得多。
+#
+# 下限訂 2.5 秒是為了不誤報偶發失步：_recover_sync 走完整條復原階梯 (含重開序列埠
+# 與 250ms 穩定等待) 約需 1 秒，期間本來就不會有 data。
+STALE_MIN_S = 2.5
+STALE_INTERVAL_MULT = 4
 
 # 關閉程式時等 worker 放掉序列埠的上限。涵蓋最壞情況：一次 Scope 區塊讀取的
 # SCOPE_READ_TIMEOUT_S(3.0) 加上收尾。超過就照關 —— 讓視窗永遠關不掉更糟。
@@ -386,6 +402,10 @@ class App(tk.Tk):
         self.scanning = False
         self.paused = False
         self.scope_capturing = False
+        # 遙測看門狗的狀態，見 _check_stale()。
+        self._data_stale = False
+        # 哨兵三態 "ok"/"desync"/"noreply"，決定「寫入被封鎖」時該講哪個原因。
+        self._signature_state = "noreply"
         # 已呼叫 stop() 但執行緒還沒結束的舊 link，見 _watch_closing()。
         self._closing_link = None
         # 最後一次鏈路錯誤，跨連線保留 —— 掉線原因不能被下一張橫幅蓋掉。
@@ -483,12 +503,13 @@ class App(tk.Tk):
         ttk.Label(header, text=V.GUI_VERSION, style="Muted.TLabel",
                   font=("Consolas", 9)).pack(side="left", padx=(6, 0))
         ttk.Label(header, textvariable=self.status, style="Muted.TLabel").pack(side="left", padx=16)
-        ttk.Label(header, textvariable=self.rate, style="Muted.TLabel",
-                  font=("Consolas", 9)).pack(side="right")
+        self.rate_label = ttk.Label(header, textvariable=self.rate,
+                                    style="Muted.TLabel", font=("Consolas", 9))
+        self.rate_label.pack(side="right")
         self.sentinel_label = ttk.Label(header, textvariable=self.sentinel,
                                         style="Muted.TLabel", font=("Consolas", 9))
         self.sentinel_label.pack(side="right", padx=16)
-        # 生效的埠與 baud。掃描可能退回舊 baud，而不顯示的話完全看不出來連的是哪個
+        # 生效的埠與 baud。掃描可能改用另一個 baud 才連上，不顯示就完全看不出連的是哪個
         # —— 而 baud 決定了頻寬上限，是判斷 FIFO 節流的前提。
         self.link_info_label = ttk.Label(header, textvariable=self.link_info,
                                          style="Muted.TLabel", font=("Consolas", 9))
@@ -498,6 +519,10 @@ class App(tk.Tk):
                                      justify="left", background=C["danger"],
                                      foreground=C["on_danger"], padx=12, pady=6,
                                      font=(self.font, 9, "bold"), wraplength=1400)
+        # wraplength 必須跟著視窗寬度走。寫死 1400 而 minsize 只有 1180 時，縮小視窗
+        # (或在 1280 寬的筆電上) 這幾行紅字右邊會被裁掉約 200px —— 而橫幅往往是
+        # 唯一的線索來源，被裁掉的通常正是「該怎麼做」那一段。
+        self.bind("<Configure>", self._on_resize)
 
         body = ttk.PanedWindow(self, orient="horizontal")
         body.pack(fill="both", expand=True, padx=12, pady=(4, 6))
@@ -700,6 +725,21 @@ class App(tk.Tk):
         self.scan_btn = ttk.Button(bar, text="掃描", width=5, command=self.scan_ports)
         self.scan_btn.pack(side="left", padx=(0, 12))
 
+        # baud 讓使用者選，不由工具猜。
+        #
+        # 兩個值都是韌體支援的正常設定 (X2C_BAUD_TARGET)，工具不推薦任何一個 ——
+        # 實測 230400 在某些板子上會中途停止回應而 115200 穩定，但那是板子的特性，
+        # 不是「舊/新」。刻意不做自動退回：明確選了 115200 卻偷偷連上 230400 只會讓
+        # 之後的排查更難。真的不知道燒的是哪個時按「掃描」，它兩個都會試。
+        ttk.Label(bar, text="baud", style="Muted.TLabel").pack(side="left")
+        self.baud_var = tk.StringVar(value=str(self.args.baud))
+        self.baud_box = ttk.Combobox(
+            bar, textvariable=self.baud_var, width=8, state="readonly",
+            font=("Consolas", 9),
+            values=[str(b) for b in V.KNOWN_BAUDS])
+        self.baud_box.pack(side="left", padx=(4, 12))
+        self.baud_box.bind("<<ComboboxSelected>>", self._on_baud_pick)
+
         ttk.Label(bar, text="間隔 ms", style="Muted.TLabel").pack(side="left")
         self.interval_var = tk.StringVar(value=str(self.args.interval))
         interval = ttk.Entry(bar, textvariable=self.interval_var, width=6,
@@ -726,6 +766,34 @@ class App(tk.Tk):
         else:
             self.connect()
 
+    def _selected_baud(self):
+        """下拉選單裡的 baud。壞值退回目前生效的值，不讓一個爛字串弄掉連線。"""
+        try:
+            return int(self.baud_var.get())
+        except (TypeError, ValueError):
+            self.baud_var.set(str(self.args.baud))
+            return self.args.baud
+
+    def _on_baud_pick(self, _event=None):
+        baud = self._selected_baud()
+        if baud == self.args.baud:
+            return
+        self.args.baud = baud
+        # 記下來當下次開程式的預設。選了就算採用 —— 不等連線成功才記，因為連不上
+        # 的時候使用者最需要的就是「我上次選的還在」而不是被打回預設值。
+        V.save_last_baud(baud)
+        if self.link is not None:
+            self.status.set(f"baud 改為 {baud:,} —— 要斷線再連線才生效")
+        else:
+            self.status.set(f"baud 設為 {baud:,}"
+                            f"（韌體端是 diagnostics_x2cscope.c 的 X2C_BAUD_TARGET）")
+
+    def _sync_baud_state(self):
+        """連線中不給改 baud —— 改了也要重連才生效，開著只會讓人以為能即時切換。"""
+        self.baud_box.configure(
+            state="disabled" if (self.link is not None or self.scanning)
+            else "readonly")
+
     def refresh_ports(self):
         """重新列舉序列埠。拔插 USB 線之後不用重開程式。"""
         ports = ["AUTO"] + [device for device, _desc in list_serial_ports()]
@@ -740,6 +808,10 @@ class App(tk.Tk):
         self.refresh_ports()
         self.scanning = True
         self.scan_btn.configure(state="disabled")
+        # 掃描從選單裡選的那個 baud 開始，失敗才試另一個 —— 所以選對的話完全不會
+        # 發生「用錯的 baud 探測」，而那正是把目標端解析器弄卡的主因。
+        self.args.baud = self._selected_baud()
+        self._sync_baud_state()
         scan_ports_async(self.events, self.args.baud,
                          include_bluetooth=self.args.include_bluetooth)
 
@@ -767,14 +839,19 @@ class App(tk.Tk):
         kwargs = {}
         if self.args.demo:
             kwargs["bad_signature"] = self.args.bad_signature
+        # 一律用選單裡的值。原本直接吃 self.args.baud，而那只有掃描那條路徑會被
+        # 更新 —— 於是「從下拉選單挑 COM15 再按連線」永遠用指令列的預設 baud，
+        # 韌體換成另一個值之後那條路徑就直接連不上，而且畫面上完全看不出原因。
+        self.args.baud = self._selected_baud()
         self.link = factory(self.port_var.get() if not self.args.demo else "DEMO",
                             self.args.baud, self.elf, interval, self.events,
                             rare_slice=self.args.rare_slice,
                             allow_writes=not self.args.read_only, **kwargs)
-        self.status.set("連線中 …")
+        self.status.set(f"連線中 … @ {self.args.baud:,}")
         self.connect_btn.configure(text="斷線")
         self._first_data = self._data_count = 0
         self.link.start()
+        self._sync_baud_state()
 
     def disconnect(self):
         if self.link is None:
@@ -796,11 +873,27 @@ class App(tk.Tk):
         self._sync_write_state()
         self.connect_btn.configure(text="連線")
         self.scope_btn.configure(state="disabled")
-        self.rate.set("輪詢 -- Hz")
+        self._clear_live_indicators()
         self.link_info.set("")
         # 擷取狀態跟著這次連線作廢，否則斷線時若正在擷取，捲動圖會永遠凍住。
         self.on_scope_active(False)
         self._watch_closing()
+
+    def _clear_live_indicators(self):
+        """把「還活著」的指示燈全部收回中性狀態。斷線的兩條路徑都要走這裡。
+
+        少了這個，斷線後標頭會留著最後一筆輪詢率與哨兵狀態，看起來像還連著；
+        而看門狗的「遙測停止 N s」更糟 —— 已經按了斷線，那個秒數只是雜訊。
+        """
+        self._data_stale = False
+        self._last_data = 0.0
+        self.rate_label.configure(foreground=C["muted"])
+        self.rate.set("輪詢 -- Hz")
+        self._signature_state = "noreply"
+        self.sentinel.set("哨兵 --")
+        self.sentinel_label.configure(foreground=C["muted"])
+        self._sync_baud_state()     # 斷線了就可以改 baud 了
+        self._update_chart_notice()
 
     def _watch_closing(self):
         """等 worker 結束、序列埠真的釋放，期間把「連線」鈕鎖住並說明在等什麼。"""
@@ -853,6 +946,9 @@ class App(tk.Tk):
                 self._dispatch(kind, payload)
         except queue.Empty:
             pass
+        # 看門狗掛在這裡而不是自己一條 after 迴圈：它要在剛抽完事件之後判斷，
+        # 而且兩者的節奏本來就一樣。多一條 after 只是多一個會忘記取消的計時器。
+        self._check_stale()
         self._tick = self.after(UI_TICK_MS, self.drain)
 
     def _dispatch(self, kind, payload):
@@ -874,6 +970,7 @@ class App(tk.Tk):
             self.connect_btn.configure(text="連線")
             self.scope_btn.configure(state="disabled")
             self.link = None
+            self._clear_live_indicators()
         elif kind == "data":
             self.on_data(payload)
         elif kind == "signature":
@@ -902,16 +999,20 @@ class App(tk.Tk):
         self._writes_permitted = bool(info.get("writes_allowed"))
         self.writes_allowed = self._writes_permitted
         signature = info.get("signature")
-        signature_text = "--" if signature is None else f"0x{int(signature):04X}"
-        if info.get("signature_ok"):
-            self.sentinel.set(f"哨兵 {signature_text} 對版")
-            self.sentinel_label.configure(foreground=C["ok"])
-        else:
-            self.sentinel.set(f"哨兵 {signature_text} 不符")
-            self.sentinel_label.configure(foreground=C["danger"])
+        self._signature_state = info.get("signature_state") or (
+            "ok" if info.get("signature_ok") else "desync")
+        signature_text = self._show_sentinel(signature, self._signature_state)
 
         problems = []
-        if not info.get("signature_ok"):
+        if self._signature_state == "noreply":
+            # 握手成功但哨兵讀不回來。這**不是**版本問題 —— 位址沒有位移，是對方
+            # 沒回話。指去重新建置 ELF 會讓人白花時間在對的檔案上。
+            problems.append(
+                "握手成功，但位址哨兵讀不回任何值 —— 目標端沒有回應。"
+                "這不是 ELF 版本問題。最可能是 baud 不符或目標端的 LNet 解析器卡住；"
+                "先按「斷線」再按「連線」，仍然不行就跑 check_link.py --scan。"
+                "寫入已封鎖。")
+        elif not info.get("signature_ok"):
             problems.append(
                 f"位址哨兵 {signature_text} ≠ 0x{V.SIGNATURE_EXPECTED:04X} — "
                 "這個 ELF 是舊的或別的 build。全域變數位址已位移，"
@@ -931,10 +1032,18 @@ class App(tk.Tk):
         self.show_banner(self._connect_banner)
 
         baud = info.get("baud") or 0
-        legacy = "  (舊 baud)" if baud and baud != V.DEFAULT_BAUD else ""
-        self.link_info.set(f"{info.get('port', '?')} @ {baud:,}{legacy}")
-        self.link_info_label.configure(
-            foreground=C["warn"] if legacy else C["muted"])
+        # 只陳述生效的 baud，不加價值判斷。原本會把非 DEFAULT_BAUD 的值標成橙色的
+        # 「(舊 baud)」—— 但 115200 與 230400 都是韌體支援的正常設定，而且實測
+        # 230400 在某些板子上不穩、115200 穩定。把使用者實測可用的那個標成「舊」
+        # 並建議升級，等於推薦他回到會掉線的設定。
+        self.link_info.set(f"{info.get('port', '?')} @ {baud:,}")
+        self.link_info_label.configure(foreground=C["muted"])
+        # 選單要跟著實際連上的值走 (掃描可能退回另一個 baud 才連上)，
+        # 否則畫面上會出現選單寫 230400、標題列寫 115,200 的矛盾。
+        if baud in V.KNOWN_BAUDS and baud != self._selected_baud():
+            self.args.baud = baud
+            self.baud_var.set(str(baud))
+            V.save_last_baud(baud)
         self.status.set(f"已連線 — {info.get('device', '')}"[:110])
         self.elf_var.set(info.get("elf", self.elf))
         self.scope_btn.configure(state="normal")
@@ -950,30 +1059,57 @@ class App(tk.Tk):
         self.refresh_table()
         self.refresh_fw_config()
 
-    def on_signature(self, payload):
-        ok = bool(payload.get("ok"))
-        signature = payload.get("signature")
+    def _show_sentinel(self, signature, state):
+        """更新標頭的哨兵指示燈。回傳顯示用的哨兵值字串。
+
+        三態各有自己的字與顏色，不能共用「不符」：
+
+        * ``對版``   綠 —— 位址正確，數值可信。
+        * ``不符``   紅 —— 位址位移，畫面上每個數字都是別的變數。要換 ELF。
+        * ``無回應`` 橘 —— 對方沒講話。位址沒有問題，數字只是舊的。要重連或重置目標端。
+
+        紅與橘的分工是刻意的：紅色在這支工具裡專門表示「數值是錯的」，橘色表示
+        「沒有數值」。把後者也印成紅色的「不符」會把使用者推去重新建置 ELF ——
+        那是完全錯的方向，而這正是修掉的那個 bug。
+        """
         try:
             text = "--" if signature is None else f"0x{int(signature):04X}"
         except (TypeError, ValueError):
             # 失步時讀回來可能是任何東西；這是 Tk 回呼，拋例外只會噴 traceback。
             text = repr(signature)[:12]
-        self.sentinel.set(f"哨兵 {text} {'對版' if ok else '不符'}")
-        self.sentinel_label.configure(foreground=C["ok"] if ok else C["danger"])
+        word, colour = {"ok": ("對版", C["ok"]),
+                        "noreply": ("無回應", C["warn"])}.get(
+                            state, ("不符", C["danger"]))
+        self.sentinel.set(f"哨兵 {text} {word}")
+        self.sentinel_label.configure(foreground=colour)
+        return text
+
+    def on_signature(self, payload):
+        ok = bool(payload.get("ok"))
+        # 舊版的 payload 沒有 state；沒有它就退回原本的二分法，行為不變。
+        state = payload.get("state") or ("ok" if ok else "desync")
+        was = self._signature_state
+        self._signature_state = state
+        text = self._show_sentinel(payload.get("signature"), state)
         # 從連線時的授權重算，而不是 `writes_allowed and ok` —— 後者一旦被壓成 False
         # 就再也回不來，於是一次偶發失步之後就永遠不能寫入了。
         self.writes_allowed = self._writes_permitted and ok
         self._sync_write_state()
         if ok:
             self.show_banner(self._connect_banner)
-            self.status.set("框架已重新對齊，數值恢復可信")
-        else:
+            self.status.set("目標端恢復回應，數值恢復可信" if was == "noreply"
+                            else "框架已重新對齊，數值恢復可信")
+        elif state == "desync":
             self.show_banner(
                 f"位址哨兵讀到 {text}（應為 0x{V.SIGNATURE_EXPECTED:04X}）。\n"
                 "連線時哨兵是對的，所以這不是 ELF 版本問題，而是 LNet 框架失步 —— "
                 "讀到的每個值都是錯位的別的變數。\n"
                 "已在自動重新對齊；期間的資料一律丟棄不顯示，寫入暫時封鎖。"
                 "若持續不恢復，請換一條 USB 線或換一個埠。")
+        # state == "noreply" 時**刻意不動橫幅**：worker 緊接著會發一張講得更清楚的
+        # (是 baud 不符還是曾經讀得到後來卡死，以及該怎麼做)。在這裡先貼一張
+        # 「框架失步、已在自動重新對齊」只是先閃一下錯的訊息再被蓋掉 —— 而那句話
+        # 在 noreply 路徑上根本是假的，那條路徑刻意不做重新對齊。
 
     def on_scope_active(self, active):
         """Scope 擷取開始/結束時凍結或恢復主頁捲動圖。
@@ -999,8 +1135,18 @@ class App(tk.Tk):
         self._update_chart_notice()
 
     def _update_chart_notice(self):
-        """捲動圖上的凍結說明。手動暫停優先於擷取中。"""
-        note = "Scope 擷取中 · 繪圖凍結（擷取結束後恢復）" if self.scope_capturing else ""
+        """捲動圖上的凍結說明。手動暫停 (Chart 自己畫) 優先於這裡的原因。
+
+        Scope 擷取排在遙測停止之前：擷取期間本來就不發遙測，那時的「停止」是預期
+        行為，講成鏈路問題會誤導人。
+        """
+        if self.scope_capturing:
+            note = "Scope 擷取中 · 繪圖凍結（擷取結束後恢復）"
+        elif self._data_stale:
+            # 曲線停住與鏈路掛掉長得一模一樣，所以一定要在圖上寫明白這是舊資料。
+            note = "遙測已停止 · 以下是最後一筆資料"
+        else:
+            note = ""
         for chart, _traces in self.charts:
             chart.notice = note
             chart.draw()
@@ -1015,6 +1161,7 @@ class App(tk.Tk):
     def on_scan_done(self, payload):
         self.scanning = False
         self.scan_btn.configure(state="normal")
+        self._sync_baud_state()
         connect_next, self._connect_after_scan = self._connect_after_scan, False
         found = payload.get("found") or []
         busy = payload.get("busy") or []
@@ -1039,8 +1186,9 @@ class App(tk.Tk):
             if skipped:
                 message += (f"已跳過 (藍牙虛擬埠): {', '.join(skipped)}"
                             "  —— 需要一併試的話加 --include-bluetooth\n")
-            message += (f"已試過 {self.args.baud} 與 {V.LEGACY_BAUD} baud，"
-                        "並沖洗過目標端卡住的半截 LNet 框架。\n")
+            message += ("已試過 "
+                        + " 與 ".join(f"{b:,}" for b in V.KNOWN_BAUDS)
+                        + " baud，並沖洗過目標端卡住的半截 LNet 框架。\n")
             # 掉線的原因不能被掃描結果蓋掉。那句話往往是唯一的線索，而使用者按下
             # 「連線」就會把它換成這張橫幅 —— 於是每次都只剩「找不到裝置」可看。
             if self._last_link_error:
@@ -1056,13 +1204,17 @@ class App(tk.Tk):
         self.port_var.set(port)
         self.show_banner("")
         if baud != self.args.baud:
-            # 掃描退回到舊 baud 才連上 -> 板子燒的是 2026-08-25 之前的韌體。
-            # 這能用，但值得講清楚，否則使用者不會知道自己少了一半頻寬。
+            # 掃描退回到另一個 baud 才連上 -> 板子燒的是那個值。把選單同步過去並
+            # 記下來，下次就直接用對的，不會再發生錯 baud 探測。
+            # 刻意不建議「重新建置燒錄改成 DEFAULT_BAUD」—— 兩個值都是正常設定，
+            # 而實測 230400 在某些板子上會中途停止回應。
             self.args.baud = baud
-            self.status.set(f"找到 {port} ({desc}) @ {baud} —— 舊韌體 baud，"
-                            f"重新建置燒錄可提升到 {V.DEFAULT_BAUD}")
+            self.baud_var.set(str(baud))
+            V.save_last_baud(baud)
+            self.status.set(f"找到 {port} ({desc}) @ {baud:,}"
+                            f" —— 選單已同步（韌體端的 X2C_BAUD_TARGET 就是這個值）")
         else:
-            self.status.set(f"找到 {port} ({desc}) @ {baud}")
+            self.status.set(f"找到 {port} ({desc}) @ {baud:,}")
         if connect_next:
             self._start_link()
 
@@ -1207,6 +1359,58 @@ class App(tk.Tk):
                 return child
         return None
 
+    def _on_resize(self, event):
+        """讓橫幅的換行寬度跟著視窗走。
+
+        ⚠ 這個回呼會收到**所有子 widget** 的 <Configure>：Tk 把 toplevel 放在每個
+        後代的 bindtags 裡。所以一定要先擋掉不是自己的事件，否則捲動圖每次重畫都會
+        跑進來一次。
+        只在數值真的改變時才設 —— 設 wraplength 會觸發重新排版，無條件設會變成
+        Configure -> 排版 -> Configure 的迴圈。
+        """
+        if event.widget is not self:
+            return
+        wrap = max(400, event.width - 40)      # 40 = 左右 padx(12) + 標籤內 padx(12)
+        if wrap != self.banner_label.cget("wraplength"):
+            self.banner_label.configure(wraplength=wrap)
+
+    def _stale_limit_s(self):
+        return max(STALE_MIN_S, STALE_INTERVAL_MULT * self._interval_ms() / 1000.0)
+
+    def _check_stale(self):
+        """遙測看門狗：偵測「還連著，但已經收不到資料」這個狀態。
+
+        哨兵閘門判定資料不可信時 worker 那一輪不發 data，而且**不會斷線** (刻意的
+        —— 斷線會把畫面上最後一筆證據一起清掉)。少了這個看門狗，標頭上的輪詢率、
+        捲動圖與圖例的即時值就全部凍在最後一筆好資料上，看起來跟正常運轉一樣。
+
+        Scope 擷取期間不算停止：那時遙測是**被刻意停掉**的 (見 on_scope_active)，
+        不是鏈路有問題。順手把心跳往前推，擷取結束的瞬間才不會閃一下紅字。
+        """
+        was = self._data_stale
+        now = time.monotonic()
+        if self.scope_capturing:
+            self._last_data = now
+        gap = 0.0
+        if not self.connected or not self._last_data:
+            self._data_stale = False
+        else:
+            gap = now - self._last_data
+            self._data_stale = gap > self._stale_limit_s()
+        if self._data_stale:
+            # 秒數每個 tick 都更新 —— 「掛了 3 秒」與「掛了 20 分鐘」的處置不同，
+            # 而 worker 的橫幅只能每 10 秒重發一次，解析度不夠。
+            self.rate.set(f"遙測停止 {gap:6.1f} s")
+        if self._data_stale == was:
+            return
+        self.rate_label.configure(
+            foreground=C["danger"] if self._data_stale else C["muted"])
+        if not self._data_stale:
+            # 恢復時先寫回一個中性值。下一個 data 事件 (最多一個輪詢週期後) 會蓋上
+            # 真的頻率；空著會讓「遙測停止 12.3 s」留在畫面上假裝還沒好。
+            self.rate.set("輪詢 -- Hz")
+        self._update_chart_notice()
+
     def _sync_write_state(self):
         for row in self.tuning_rows:
             row.set_enabled(self.writes_allowed)
@@ -1267,26 +1471,48 @@ class App(tk.Tk):
         if self.link is None:
             messagebox.showwarning("未連線", "請先連線。")
             return
-        self.status.set(f"讀取 {len(V.WRITE_VARS)} 個可寫參數 …")
+        note = ""
+        if self._data_stale:
+            # 目標端沒回應時每顆變數都會卡滿 pyserial 的 1 秒逾時，40 顆就是 40 秒。
+            # 不先講清楚的話，使用者會以為程式當掉了。按鈕刻意保持可按 —— 目標端
+            # 可能已經恢復，而重試一次是判斷它有沒有恢復最直接的方法。
+            note = "（遙測已停止，每顆都要等逾時，最久約 40 秒）"
+        self.status.set(f"讀取 {len(V.WRITE_VARS)} 個可寫參數 …{note}")
         self.link.submit("read_writes")
 
-    def on_write_values(self, values):
+    def on_write_values(self, payload):
+        """payload = (values, 讀取失敗的變數名)。
+
+        失敗名單一定要分開拿。原本只看「值是不是 None」，於是鏈路掛掉時整排 None
+        被講成「40 項不在這個 build 裡」—— 那是完全錯的診斷，而且正好把人推去
+        懷疑韌體少編了東西。「不在 build 裡」與「讀不回來」兩件事的處置完全不同。
+        """
+        values, failed = payload if isinstance(payload, tuple) else (payload, [])
+        failed = set(failed or ())
         for row in self.tuning_rows + self.danger_rows:
             row.refresh(values.get(row.name), self.scale)
-        missing = [n for n, v in values.items() if v is None]
-        if missing:
-            self.status.set(f"已讀回 {len(values) - len(missing)} 項，"
-                            f"{len(missing)} 項不在這個 build 裡")
-        else:
-            self.status.set(f"已讀回 {len(values)} 個可寫參數")
+        absent = [n for n, v in values.items() if v is None and n not in failed]
+        got = len(values) - len(failed) - len(absent)
+        parts = [f"已讀回 {got} 項"]
+        if failed:
+            parts.append(f"{len(failed)} 項讀取失敗（目標端沒有回應）")
+        if absent:
+            parts.append(f"{len(absent)} 項不在這個 build 裡")
+        self.status.set("，".join(parts))
 
     def request_write(self, name, value):
         if self.link is None:
             messagebox.showwarning("未連線", "請先連線。")
             return
         if not self.writes_allowed:
-            messagebox.showwarning("寫入已封鎖",
-                                   "唯讀模式，或位址哨兵不符 (ELF 不對版)。")
+            # 原因要照哨兵的三態分流。一句「位址哨兵不符 (ELF 不對版)」在目標端
+            # 只是沒回話的時候是錯的診斷 —— 使用者會跑去重新建置一個本來就對的 ELF。
+            reason = {
+                "noreply": "目標端沒有回應，寫不進去。先按「斷線」再按「連線」試一次。",
+                "desync": "位址哨兵不符：ELF 不對版或 LNet 框架失步，"
+                          "寫入會落在錯誤的位址上。",
+            }.get(self._signature_state, "唯讀模式（--read-only）。")
+            messagebox.showwarning("寫入已封鎖", reason)
             return
         self.link.submit("write", (name, value))
 
@@ -1359,7 +1585,12 @@ def main():
     parser.add_argument("--version", action="version",
                         version=f"LWFDSPC 主機端工具 {V.GUI_VERSION}")
     parser.add_argument("--port", default=None, help='COM port，或 "AUTO"')
-    parser.add_argument("--baud", type=int, default=V.DEFAULT_BAUD)
+    # default=None 才分得出「使用者明確指定」與「沒給」。沒給時用上次成功的 baud，
+    # 那比一律套 DEFAULT_BAUD 好：韌體的 X2C_BAUD_TARGET 一旦改成另一個值，
+    # 每次開程式都要重新選一遍。
+    parser.add_argument("--baud", type=int, default=None,
+                        choices=V.KNOWN_BAUDS,
+                        help=f"UART2 baud（預設：上次成功的值，或 {V.DEFAULT_BAUD}）")
     parser.add_argument("--elf", default=str(V.DEFAULT_ELF))
     parser.add_argument("--interval", type=int, default=125, help="輪詢間隔 ms")
     parser.add_argument("--rare-slice", type=int, default=8,
@@ -1373,6 +1604,8 @@ def main():
     parser.add_argument("--bad-signature", action="store_true",
                         help="--demo 時強制哨兵不符，驗封鎖路徑")
     args = parser.parse_args()
+    if args.baud is None:
+        args.baud = V.load_last_baud() or V.DEFAULT_BAUD
     App(args).mainloop()
 
 
